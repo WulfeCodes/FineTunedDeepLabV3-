@@ -3,6 +3,8 @@ This code takes a model's weights for deeplabV3+ trained on city scape dataset a
 Necessary linkage of the path's weights and the folder locations for respective input and output files are needed, but set up is minimal within the main method.
 
 current model weights: https://drive.google.com/file/d/1HXUEMMD85b746F2CVlpJ4ICecv6q_Ebz/view?usp=sharing
+
+
 Training Data: 
 https://drive.google.com/file/d/1Hz-Hlyr5NFwk2YSwtRh5L75vWTK1r3k3/view?usp=sharing
 
