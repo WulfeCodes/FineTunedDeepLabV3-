@@ -83,8 +83,11 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
 
     total_loss = 0
 
-    for k,img_folder in enumerate(os.listdir(img_src_meta_folder)):
-        for i,folder in enumerate(os.listdir(trainFolder)):
+    for i, (img_folder,folder) in enumerate(zip(os.listdir(img_src_meta_folder),os.listdir(trainFolder))):
+
+
+            if i == 0:
+                continue
 
             if folder == None:
                 break
@@ -97,19 +100,21 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
             tensors = [tns for tns in glob.glob(os.path.join(folder_path, "*.pt"))]
             tensors.sort()
 
-            for y, image_ in enumerate(images):
-                for z, label_file in enumerate(tensors):
 
-                
-                    if len(tensors)!=len(images):
-                        print("warning may be a folder mismatch")
-                        print(tensors,images)
-                        print(len(tensors,len(images)))
+            if len(tensors)!=len(images):
+                print("warning may be a folder mismatch")
+                print(tensors,images)
+                print(len(tensors),len(images))
+                continue
+
+
+            for z,(image_,label_file) in enumerate(zip(images,tensors)):
+
                     if not tensors:
                         print("No images found")
 
-                    #batch debug
-                    if z > len(images)-2:
+                    #only train on 5th images
+                    if z > len(images)-5 or z%5!=0:
                         continue
                     
                     labels = torch.load(label_file)
@@ -117,7 +122,7 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
 
                     input_tensor, original_img = preprocess_image(image_)
 
-                    nxt_input_tensor, nxt_img = preprocess_image(images[y+1])
+                    nxt_input_tensor, nxt_img = preprocess_image(images[z+1])
 
                     print(f"pre batch+1 input tensor shape: {input_tensor.shape}, label shape: {labels.shape}")
 
@@ -143,17 +148,42 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
             print(f"Epoch [{i+1}], Loss: {total_loss:.4f}")
 
 def inference(model,batch_tensor):
+
+    img_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-17-06-33/2025-06-06-17-06-40.028664.jpg"
+
+    batch_tensor, orig_image = preprocess_image(img_path)
+
+    #road = ID 7
+
     try:
         with torch.no_grad():
             op_tensor=model(batch_tensor)
             print("successful inference")
             op_tensor=op_tensor.squeeze(0)
-            pred = torch.argmax(op_tensor,dim=0)
+            labels = torch.argmax(op_tensor,dim=0)
+
             #each pixel gets an arg max from the batch dim of classes
-            return pred
+            binary_mask = (labels == 7).float()
+
+            binary_segmented_image = color_binary_mask(orig_image,labels)
+            
+            #TODO experimentation of kernel sizes 
+            kernel = np.ones((5,5), np.uint8)  # 5x5 square kernel
+
+            closed = cv.morphologyEx(binary_mask, cv.MORPH_CLOSE, kernel)
+
+            #skeletonize or custom centerline approach
+
+            return binary_segmented_image,labels
         
     except Exception as e:
         print(f"error at inference with {e}")
+
+def color_binary_mask(image, binary_mask, color=(0, 255, 0), alpha=0.5):
+    """Overlay binary mask on image with specified color"""
+    colored_image = image.copy()
+    colored_image[binary_mask == 1] = colored_image[binary_mask == 1] * (1 - alpha) + np.array(color) * alpha
+    return colored_image.astype(np.uint8)
 
 def get_cityscapes_colors():
     """Standard Cityscapes color palette for 19 classes"""
@@ -375,15 +405,19 @@ def main():
     # print("successfully performed img inference")
     
 
-    
-    model.eval()
-    segment_metafolder(model,img_path,meta_folder_path,"C:/Project/DL_HW/dataset")
+    ##annotation function##
+    # model.eval()
+    # segment_metafolder(model,img_path,meta_folder_path,"C:/Project/DL_HW/dataset")
+    ##annotation function##
 
+    ##train function##
     model.train()
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     train(model,criterion,optimizer,img_path,"C:/Project/DL_HW/dataset/trainFrames")
+    ##train function##
+
     # model.eval()
     # op=inference(model,input_tensor)   
 
