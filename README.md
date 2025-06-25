@@ -1,4 +1,4 @@
-This code takes a model's weights for deeplabV3+ trained on city scape dataset and fine tunes it on KSU EVT footage.
+This code takes a model's weights for deeplabV3+ trained on city scape dataset and fine tunes it on AMP's EVT footage.
 
 Necessary linkage of the path's weights and the folder locations for respective input and output files are needed, but set up is minimal within the main method.
 
