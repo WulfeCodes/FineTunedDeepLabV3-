@@ -182,8 +182,9 @@ def get_road_centerline(binary_mask,binary_colored_img):
                         right_road_pxl_seen=True
             if right_road_pxl_seen and left_road_pxl_seen:
                 midpoint_road_pxl = (left_most_road_pxl+right_most_road_pxl)//2
-                binary_colored_img[i][midpoint_road_pxl]=[255,0,0]
-                mid_point_coor_array.append([i,midpoint_road_pxl])
+                if binary_mask_bool[i][midpoint_road_pxl-1] or binary_mask_bool[i][midpoint_road_pxl+1]:
+                    binary_colored_img[i][midpoint_road_pxl]=[254,0,254]
+                    mid_point_coor_array.append([i,midpoint_road_pxl])
                 break
 
 
