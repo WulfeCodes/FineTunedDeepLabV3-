@@ -10,37 +10,40 @@ import os
 import subprocess
 import glob
 import torchvision.transforms.functional as F
-
+from scipy.interpolate import splprep,splev
 #dependencies: git clone https://github.com/VainF/DeepLabV3Plus-Pytorch.git
 
     #cityscape eval input size: 512x512, 513x513, 768x768,1024x2048, and 16:9{ds shapes:1280x720}
     #standard shapes are Batch,RGB,H,W
-def create_smart_preprocessor(target_width=768):
+
+
+def smart_resize(img,target_width=768):
+    original_width, original_height = img.size  # PIL gives (width, height)
+    aspect_ratio = original_height / original_width  # h/w ratio
+    
+    new_width = target_width  # 768
+    new_height = int(target_width * aspect_ratio)  # 768 * (720/1280) = 432
+    
+    # print(f"Resizing {original_width}x{original_height} → {new_width}x{new_height}")
+    # print(f"Will create tensor shape: [3, {new_height}, {new_width}]")
+    return img.resize((new_width, new_height), Image.BILINEAR)
+
+def create_smart_preprocessor(img,target_width=768):
     """
     Keep 16:9 aspect ratio, scale by width
     1280x720 → 768x432 (width x height in image terms)
     Results in tensor shape: [3, 432, 768] (C, H, W)
     """
     
-    def smart_resize(img):
-        original_width, original_height = img.size  # PIL gives (width, height)
-        aspect_ratio = original_height / original_width  # h/w ratio
-        
-        new_width = target_width  # 768
-        new_height = int(target_width * aspect_ratio)  # 768 * (720/1280) = 432
-        
-        # print(f"Resizing {original_width}x{original_height} → {new_width}x{new_height}")
-        # print(f"Will create tensor shape: [3, {new_height}, {new_width}]")
-        return img.resize((new_width, new_height), Image.BILINEAR)
     
     transforms_list = [
-        transforms.Lambda(smart_resize),
+        transforms.Lambda(lambda imag: smart_resize(img)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], 
                            std=[0.229, 0.224, 0.225])
     ]
     
-    return transforms.Compose(transforms_list)
+    return transforms.Compose(transforms_list),smart_resize(img)
 
 
 def preprocess_image(img_path):
@@ -48,7 +51,7 @@ def preprocess_image(img_path):
     img = Image.open(img_path)
     # print(f"Original image: {img.size}")
     
-    preprocessor = create_smart_preprocessor(target_width=768)
+    preprocessor,reshaped_img = create_smart_preprocessor(img,target_width=768)
     processed_tensor = preprocessor(img)
     
     # print(f"Processed tensor: {processed_tensor.shape}")
@@ -57,9 +60,9 @@ def preprocess_image(img_path):
     batch_tensor = processed_tensor.unsqueeze(0)
     # print(f"Model input shape: {batch_tensor.shape}")
     
-    return batch_tensor, img  # Return both for visualization later
+    return batch_tensor, img,reshaped_img  # Return both for visualization later
 
-def training_inference(model,batch_tensor,threshold=.75):
+def annotate_inference(model,batch_tensor,threshold=.75):
     try:
         with torch.no_grad():
             op_tensor=model(batch_tensor)
@@ -120,9 +123,9 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
                     labels = torch.load(label_file)
                     nxt_labels = torch.load(tensors[z+1])
 
-                    input_tensor, original_img = preprocess_image(image_)
+                    input_tensor, original_img, shaped_img = preprocess_image(image_)
 
-                    nxt_input_tensor, nxt_img = preprocess_image(images[z+1])
+                    nxt_input_tensor, nxt_img, shaped_nxt_img = preprocess_image(images[z+1])
 
                     print(f"pre batch+1 input tensor shape: {input_tensor.shape}, label shape: {labels.shape}")
 
@@ -147,42 +150,106 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
 
             print(f"Epoch [{i+1}], Loss: {total_loss:.4f}")
 
-def inference(model,batch_tensor):
 
-    img_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-17-06-33/2025-06-06-17-06-40.028664.jpg"
+def get_road_centerline(binary_mask,binary_colored_img):
+    #TODO set of tuples, stored coordinates of centerline marks. 
+    # should be sorted in descending order from y
+    mid_point_coor_array = []
+    binary_mask_bool = binary_mask.astype(bool)
+    
+    left_most_road_pxl = 0
+    right_most_road_pxl = 0
+    left_road_pxl_seen = False
+    right_road_pxl_seen = False
 
-    batch_tensor, orig_image = preprocess_image(img_path)
+    for i in range(len(binary_mask_bool)):
+        left_pointer = 0
+        right_pointer = len(binary_mask_bool[0])-1
+        left_road_pxl_seen = False
+        right_road_pxl_seen = False
 
-    #road = ID 7
+        for j in range(len(binary_mask_bool[0])):
+            if not left_road_pxl_seen:
+                
+                if binary_mask_bool[i][left_pointer]:
+                        left_most_road_pxl = left_pointer
+                        left_road_pxl_seen = True
 
+            if not right_road_pxl_seen:
+
+                if binary_mask_bool[i][right_pointer]:
+                        right_most_road_pxl = right_pointer
+                        right_road_pxl_seen=True
+            if right_road_pxl_seen and left_road_pxl_seen:
+                midpoint_road_pxl = (left_most_road_pxl+right_most_road_pxl)//2
+                binary_colored_img[i][midpoint_road_pxl]=[255,0,0]
+                mid_point_coor_array.append([i,midpoint_road_pxl])
+                break
+
+
+            if (not left_road_pxl_seen or right_road_pxl_seen) and j+1>=len(binary_mask[0])-1:
+                print(f"error by {left_road_pxl_seen} or {right_road_pxl_seen} at row {i}")
+            right_pointer-=1
+            left_pointer+=1
+
+    #spline logic
+    coord_np_array = np.array(mid_point_coor_array)        
+    print("coord shape:",coord_np_array.shape)
+    x_s = np.array(coord_np_array[:,0])
+    y_s = np.array(coord_np_array[:,1])
+    datapoints = np.vstack([x_s,y_s])
+
+    tck, u = splprep(datapoints,s=5)
+    u_fine = np.linspace(0,1,500)
+    x_smooth, y_smooth = splev(u_fine,tck)
+
+    for z, (x_coords,y_coords) in enumerate(zip(x_smooth,y_smooth)):
+        binary_colored_img[int(round(x_coords)),int(round(y_coords))] = [251,198,207]
+
+    return binary_colored_img
+
+
+def inference(model,img_path):
+
+    batch_tensor, orig_image,reshaped_img= preprocess_image(img_path)
+
+
+    #road = ID 0
     try:
         with torch.no_grad():
             op_tensor=model(batch_tensor)
-            print("successful inference")
             op_tensor=op_tensor.squeeze(0)
             labels = torch.argmax(op_tensor,dim=0)
+            segmented_image = create_overlay_visualization(orig_image,labels)
+            plt.imshow(segmented_image); plt.show()
 
             #each pixel gets an arg max from the batch dim of classes
-            binary_mask = (labels == 7).float()
-
-            binary_segmented_image = color_binary_mask(orig_image,labels)
-            
+            binary_mask = (labels == 0).float()
+            binary_mask_np = binary_mask.cpu().numpy().astype(np.uint8)
+            binary_segmented_image = color_binary_mask(reshaped_img,binary_mask)
             #TODO experimentation of kernel sizes 
             kernel = np.ones((5,5), np.uint8)  # 5x5 square kernel
+            closed = cv.morphologyEx(binary_mask_np, cv.MORPH_CLOSE, kernel)
+            print('BINARY DEBUG',binary_segmented_image.shape)
 
-            closed = cv.morphologyEx(binary_mask, cv.MORPH_CLOSE, kernel)
-
+            custom_cntr_line_img=get_road_centerline(binary_mask_np,binary_segmented_image)
             #skeletonize or custom centerline approach
-
-            return binary_segmented_image,labels
+            print("DEEBUG")
+            return binary_segmented_image,closed,custom_cntr_line_img
         
     except Exception as e:
         print(f"error at inference with {e}")
 
-def color_binary_mask(image, binary_mask, color=(0, 255, 0), alpha=0.5):
+def color_binary_mask(image, binary_mask, color=(0, 255, 0), alpha=1):
+
+    if not isinstance(image, np.ndarray):
+        image = np.array(image)
+
     """Overlay binary mask on image with specified color"""
     colored_image = image.copy()
     colored_image[binary_mask == 1] = colored_image[binary_mask == 1] * (1 - alpha) + np.array(color) * alpha
+    colored_image[binary_mask == 0] = colored_image[binary_mask == 0] * (1 - alpha) + np.array((0,0,255)) * alpha
+
     return colored_image.astype(np.uint8)
 
 def get_cityscapes_colors():
@@ -313,9 +380,8 @@ def segment_metafolder(model,image_folder, output_video_path, temp_frame_path, f
         for i,image_path in enumerate(images):
 
             temper_frame_path = os.path.join(temp_frames_path_made, f"frame_{i:06d}.jpg")
-            input_tensor, original_img = preprocess_image(image_path)
-            labels=training_inference(model,input_tensor) 
-            #TODO training inference function that outputs min_prob segmented tensor, store this along with images
+            input_tensor, original_img, reshaped_img = preprocess_image(image_path)
+            labels=annotate_inference(model,input_tensor) 
             if labels is None:
                 print("error parsing image")
                 continue
@@ -361,65 +427,28 @@ def main():
     model.load_state_dict(torch.load( PATH_TO_PTH, map_location='cpu',weights_only=False)['model_state'])
     print("entering meta mode")
 
-    # frame = cv.imread("C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-16-14-24/2025-06-06-16-14-30.782489.jpg")
-    # height, width, layers = frame.shape
-    # size = (width, height)
-
-
-    # op_video_path = os.path.join(f"{meta_folder_path}","2.mp4")
-    # ffmpeg_input_pattern = os.path.join("C:/Project/DL_HW/dataset/fuu2", "frame_%06d.jpg")  
-    # ffmpeg_command = [
-    #     'ffmpeg',
-    #     '-y',
-    #     '-r', str(30),
-    #     '-i', ffmpeg_input_pattern,
-    #     '-c:v', 'libx264',
-    #     '-pix_fmt', 'yuv420p',
-    #     '-crf', '23',
-    #     '-preset', 'medium',
-    #     '-vf', f'scale={width}:{height}', # Added this for explicit resolution
-    #     op_video_path
-    # ]
-
-
-
-    # try:
-    #     # This is the line that executes ffmpeg.exe
-    #     ffmpeg_process = subprocess.run(ffmpeg_command + ['-loglevel', 'verbose'], check=False, capture_output=True, text=True)
-
-    #     if ffmpeg_process.returncode != 0:
-    #         print(f"\nFATAL ERROR: FFmpeg command failed with return code {ffmpeg_process.returncode}.")
-    #         print(f"Stderr: \n{ffmpeg_process.stderr}") # <--- This will print FFmpeg's error messages
-    #         print(f"Stdout: \n{ffmpeg_process.stdout}") # <--- This will print FFmpeg's general output
-    #         print("--- End FFmpeg Error Output ---")
-    #     else:
-    #         print(f"\nSUCCESS: FFmpeg command completed with return code {ffmpeg_process.returncode}.")
-    #         print(f"FFmpeg Stdout (might contain warnings):\n{ffmpeg_process.stdout}")
-    #         if ffmpeg_process.stderr: # Sometimes warnings appear in stderr even on success
-    #             print(f"FFmpeg Stderr (might contain warnings):\n{ffmpeg_process.stderr}")
-    #         print("--- End FFmpeg Output ---")
-
-    # except Exception as e:
-    #     print(f"\nAn unexpected error occurred during FFmpeg execution: {e}")
-
-    # print("successfully performed img inference")
-    
-
-    ##annotation function##
+    #annotation function##
     # model.eval()
     # segment_metafolder(model,img_path,meta_folder_path,"C:/Project/DL_HW/dataset")
-    ##annotation function##
+    #annotation function##
 
     ##train function##
-    model.train()
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    # model.train()
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    train(model,criterion,optimizer,img_path,"C:/Project/DL_HW/dataset/trainFrames")
+    # train(model,criterion,optimizer,img_path,"C:/Project/DL_HW/dataset/trainFrames")
     ##train function##
 
-    # model.eval()
-    # op=inference(model,input_tensor)   
+    ##!INFERENCE FUNCTION##
+    frame_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-16-45-44/2025-06-06-16-45-53.419261.jpg"
+    model.eval()
+    binary_segmented_image,closed_labels,custom_cntr_line_img=inference(model,frame_path)
+    plt.imshow(binary_segmented_image); plt.show()
+    plt.imshow(custom_cntr_line_img); plt.show()
+
+    ##!INFERENCE FUNCTION##
+
 
     # create_overlay_visualization(original_img,op)
 
