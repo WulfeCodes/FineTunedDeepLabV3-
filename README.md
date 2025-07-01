@@ -14,5 +14,9 @@ Segment_metafolder parses the folder of EVT raw image frames, runs inference wit
 
 The training method matches the original folders with the respective temporary folder fuu{i} and performs batch training off of passed in parameters of pytorch loss function and optimizers
 
+#For Inference of frame:
+  Simply pass in model and frame path into inference(), it will return an image similiar to this: ![image](https://github.com/user-attachments/assets/30c19974-16a1-4267-9e3e-4883c6860a2c)
+
+  Along with pixel coords of centerline.
 
 
