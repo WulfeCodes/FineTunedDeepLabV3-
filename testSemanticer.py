@@ -182,38 +182,124 @@ def get_road_centerline(binary_mask,binary_colored_img):
                         right_road_pxl_seen=True
             if right_road_pxl_seen and left_road_pxl_seen:
                 midpoint_road_pxl = (left_most_road_pxl+right_most_road_pxl)//2
-                if binary_mask_bool[i][midpoint_road_pxl-1] or binary_mask_bool[i][midpoint_road_pxl+1]:
+                if(binary_mask_bool[i][midpoint_road_pxl-1] or binary_mask_bool[i][midpoint_road_pxl+1]) and binary_mask_bool[i][midpoint_road_pxl]:
                     binary_colored_img[i][midpoint_road_pxl]=[254,0,254]
                     mid_point_coor_array.append([i,midpoint_road_pxl])
                 break
 
 
             if (not left_road_pxl_seen or right_road_pxl_seen) and j+1>=len(binary_mask[0])-1:
-                print(f"error by {left_road_pxl_seen} or {right_road_pxl_seen} at row {i}")
+                #print(f"error by {left_road_pxl_seen} or {right_road_pxl_seen} at row {i}")
+                continue
             right_pointer-=1
             left_pointer+=1
 
-    #spline logic
+    #spline logicdef infer
     coord_np_array = np.array(mid_point_coor_array)        
-    print("coord shape:",coord_np_array.shape)
     x_s = np.array(coord_np_array[:,0])
     y_s = np.array(coord_np_array[:,1])
     datapoints = np.vstack([x_s,y_s])
 
-    tck, u = splprep(datapoints,s=5)
+    tck, u = splprep(datapoints,s=10)
     u_fine = np.linspace(0,1,500)
     x_smooth, y_smooth = splev(u_fine,tck)
 
     for z, (x_coords,y_coords) in enumerate(zip(x_smooth,y_smooth)):
         binary_colored_img[int(round(x_coords)),int(round(y_coords))] = [251,198,207]
 
-    return binary_colored_img
+    return binary_colored_img,mid_point_coor_array,(int(round(y_coords)),int(round(x_coords)))
+
+def remove_small_components(binary_img, min_size=500):
+    # Find connected components
+    num_labels, labels, stats, centroids = cv.connectedComponentsWithStats(binary_img)
+    
+    # Create output image
+    output = np.zeros_like(binary_img)
+    
+    # Keep only large components
+    for i in range(1, num_labels):  # Skip background (label 0)
+        if stats[i, cv.CC_STAT_AREA] >= min_size:
+            output[labels == i] = 1
+    
+    return output
+
+
+def inference_vid(model,img_path,temp_frames_path,op_video_path):
+
+    for i, frame in enumerate(os.listdir(img_path)):
+
+        frame_path = os.path.join(img_path,frame)
+        batch_tensor, orig_image,reshaped_img= preprocess_image(frame_path)
+        frame_ = cv.imread(frame_path)
+        height, width, layers = frame_.shape
+        ffmpeg_input_pattern = os.path.join(temp_frames_path, "frame_%06d.jpg")  
+        ffmpeg_command = [
+            'ffmpeg',
+            '-y',
+            '-r', str(30),
+            '-i', ffmpeg_input_pattern,
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-crf', '23',
+            '-preset', 'medium',
+            '-vf', f'scale={width}:{height}', # Added this for explicit resolution
+            op_video_path
+        ]
+
+
+        print(f"\nExecuting FFmpeg command to create video: {' '.join(ffmpeg_command)}")
+
+    #road = ID 0
+        try:
+            with torch.no_grad():
+                op_tensor=model(batch_tensor)
+                op_tensor=op_tensor.squeeze(0)
+                labels = torch.argmax(op_tensor,dim=0)
+                segmented_image = create_overlay_visualization(orig_image,labels)
+
+                #each pixel gets an arg max from the batch dim of classes
+                binary_mask = (labels == 0).float()
+                binary_mask_np = binary_mask.cpu().numpy().astype(np.uint8)
+                binary_segmented_image = color_binary_mask(reshaped_img,binary_mask)
+                #TODO experimentation of kernel sizes 
+                cleaned = remove_small_components(binary_mask_np, min_size=500)
+                print('BINARY DEBUG',binary_segmented_image.shape)
+
+
+                
+                custom_cntr_line_img=get_road_centerline(cleaned,binary_segmented_image)
+                #skeletonize or custom centerline approach
+                print("DEEBUG")
+                temper_frame_path = os.path.join(temp_frames_path, f"frame_{i:06d}.jpg")
+                
+                cv.imwrite(temper_frame_path,custom_cntr_line_img)
+                    
+        except Exception as e:
+            print(f"error at inference with {e}")
+    try:
+        # This is the line that executes ffmpeg.exe
+        ffmpeg_process = subprocess.run(ffmpeg_command + ['-loglevel', 'verbose'], check=False, capture_output=True, text=True)
+
+        if ffmpeg_process.returncode != 0:
+            print(f"\nFATAL ERROR: FFmpeg command failed with return code {ffmpeg_process.returncode}.")
+            print(f"Stderr: \n{ffmpeg_process.stderr}") # <--- This will print FFmpeg's error messages
+            print(f"Stdout: \n{ffmpeg_process.stdout}") # <--- This will print FFmpeg's general output
+            print("--- End FFmpeg Error Output ---")
+        else:
+            print(f"\nSUCCESS: FFmpeg command completed with return code {ffmpeg_process.returncode}.")
+            print(f"FFmpeg Stdout (might contain warnings):\n{ffmpeg_process.stdout}")
+            if ffmpeg_process.stderr: # Sometimes warnings appear in stderr even on success
+                print(f"FFmpeg Stderr (might contain warnings):\n{ffmpeg_process.stderr}")
+            print("--- End FFmpeg Output ---")
+
+    except Exception as e:
+                    print(f"\nAn unexpected error occurred during FFmpeg execution: {e}")
+
 
 
 def inference(model,img_path):
 
     batch_tensor, orig_image,reshaped_img= preprocess_image(img_path)
-
 
     #road = ID 0
     try:
@@ -222,21 +308,16 @@ def inference(model,img_path):
             op_tensor=op_tensor.squeeze(0)
             labels = torch.argmax(op_tensor,dim=0)
             segmented_image = create_overlay_visualization(orig_image,labels)
-            plt.imshow(segmented_image); plt.show()
 
             #each pixel gets an arg max from the batch dim of classes
             binary_mask = (labels == 0).float()
             binary_mask_np = binary_mask.cpu().numpy().astype(np.uint8)
-            binary_segmented_image = color_binary_mask(reshaped_img,binary_mask)
-            #TODO experimentation of kernel sizes 
-            kernel = np.ones((5,5), np.uint8)  # 5x5 square kernel
-            closed = cv.morphologyEx(binary_mask_np, cv.MORPH_CLOSE, kernel)
-            print('BINARY DEBUG',binary_segmented_image.shape)
-
-            custom_cntr_line_img=get_road_centerline(binary_mask_np,binary_segmented_image)
+            #TODO experimentation of kernel sizes
+            cleaned = remove_small_components(binary_mask_np, min_size=500)
+            binary_segmented_image = color_binary_mask(reshaped_img,cleaned)
+            custom_cntr_line_img,discrete_cntrPoints,InterpolatedCntrPoints=get_road_centerline(cleaned,binary_segmented_image)
             #skeletonize or custom centerline approach
-            print("DEEBUG")
-            return binary_segmented_image,closed,custom_cntr_line_img
+            return binary_segmented_image,discrete_cntrPoints,InterpolatedCntrPoints
         
     except Exception as e:
         print(f"error at inference with {e}")
@@ -245,7 +326,7 @@ def color_binary_mask(image, binary_mask, color=(0, 255, 0), alpha=1):
 
     if not isinstance(image, np.ndarray):
         image = np.array(image)
-
+    
     """Overlay binary mask on image with specified color"""
     colored_image = image.copy()
     colored_image[binary_mask == 1] = colored_image[binary_mask == 1] * (1 - alpha) + np.array(color) * alpha
@@ -444,10 +525,14 @@ def main():
     ##!INFERENCE FUNCTION##
     frame_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-16-45-44/2025-06-06-16-45-53.419261.jpg"
     model.eval()
-    binary_segmented_image,closed_labels,custom_cntr_line_img=inference(model,frame_path)
-    plt.imshow(binary_segmented_image); plt.show()
-    plt.imshow(custom_cntr_line_img); plt.show()
 
+    smple_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-07-12-14-29"
+    #inference_vid(model,smple_path,temp_frames_path="C:/Project/SemanticTester/tempFrameim",op_video_path="C:/Project/SemanticTester/output/vid.mp4")
+    img1,discrete_cntrPoints,InterpolatedCntrPoints=inference(model,frame_path)
+    
+    plt.imshow(img1); plt.show()
+    print(discrete_cntrPoints)
+    print(InterpolatedCntrPoints)
     ##!INFERENCE FUNCTION##
 
 
