@@ -29,6 +29,11 @@ class LuxCam:
         self.out = self.pipeline.create(dai.node.XLinkOut)
         self.out.setStreamName("rgb")
         self.cam.preview.link(self.out.input)
+        self.ret = None
+        self.camera_matrix = None 
+        self.dist_coeffs = None
+        self.rvecs = None
+        self.tvecs= None
 
     def calibrateDatHoe(self,CharucoBoard):
         with dai.Device(self.pipeline) as device:
@@ -61,6 +66,15 @@ class LuxCam:
                     print(f"Captured {len(CharucoBoard.all_corners)} images")
                     
                 elif key == ord('q') and len(CharucoBoard.all_corners) > 10:
+
+                    try:
+                        print("Calibrating...")
+                        self.ret, self.camera_matrix, self.dist_coeffs, self.rvecs, self.tvecs = cv2.aruco.calibrateCameraCharuco(
+                            CharucoBoard.all_corners, CharucoBoard.all_ids, CharucoBoard.board, (1280, 800), None, None)
+                        print("SUCCessful",self.camera_matrix)
+                    
+                    except Exception as e:
+                        print("failed calibrating w:",e)
                     break            
 
 
