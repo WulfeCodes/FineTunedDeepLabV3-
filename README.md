@@ -8,6 +8,10 @@ current model weights: https://drive.google.com/file/d/1HXUEMMD85b746F2CVlpJ4ICe
 Training Data: 
 https://drive.google.com/file/d/1Hz-Hlyr5NFwk2YSwtRh5L75vWTK1r3k3/view?usp=sharing
 
+or 
+
+https://www.dropbox.com/scl/fo/i4k86qqiuzy33aawug287/AJZbFCPIvT521xW8lekSDr8/best_deeplabv3plus_mobilenet_cityscapes_os16.pth?rlkey=fgm7rgpeankeh9394j492sxif&st=oc0bpoyx&dl=0
+
 git clone of https://github.com/VainF/DeepLabV3Plus-Pytorch.git is recommended for model initialization. 
 
 Segment_metafolder parses the folder of EVT raw image frames, runs inference with the model and stores segmented images and label .pt files into a folder denoted as fuu{i}.
