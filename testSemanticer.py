@@ -18,16 +18,14 @@ from scipy.interpolate import splprep,splev
 
 
 def smart_resize(img,target_width=768):
-    original_width, original_height = img.size  # PIL gives (width, height)
-    aspect_ratio = original_height / original_width  # h/w ratio
+    aspect_ratio = 10 / 16  # 0.625 for 16:10
     
     new_width = target_width  # 768
-    new_height = int(target_width * aspect_ratio)  # 768 * (720/1280) = 432
+    new_height = int(target_width * aspect_ratio)  # 768 * 0.625 = 480
     
-    # print(f"Resizing {original_width}x{original_height} → {new_width}x{new_height}")
+    # print(f"Resizing {img.size[0]}x{img.size[1]} → {new_width}x{new_height}")
     # print(f"Will create tensor shape: [3, {new_height}, {new_width}]")
     return img.resize((new_width, new_height), Image.BILINEAR)
-
 def create_smart_preprocessor(img,target_width=768):
     """
     Keep 16:9 aspect ratio, scale by width
@@ -82,7 +80,7 @@ def annotate_inference(model,batch_tensor,threshold=.75):
     except Exception as e:
         print(f"error at inference with {e}")
 
-def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'):
+def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,device='cpu'):
 
     total_loss = 0
 
@@ -147,8 +145,12 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,device='cpu'
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
-
+            save(model,savePath)
             print(f"Epoch [{i+1}], Loss: {total_loss:.4f}")
+
+def save(model,savePath):
+    torch.save(model.state_dict(), savePath)
+    print(f"Model weights saved to {savePath}")
 
 
 def get_road_centerline(binary_mask,binary_colored_img):
@@ -264,8 +266,6 @@ def inference_vid(model,img_path,temp_frames_path,op_video_path):
                 #TODO experimentation of kernel sizes 
                 cleaned = remove_small_components(binary_mask_np, min_size=500)
                 print('BINARY DEBUG',binary_segmented_image.shape)
-
-
                 
                 custom_cntr_line_img=get_road_centerline(cleaned,binary_segmented_image)
                 #skeletonize or custom centerline approach
@@ -300,7 +300,8 @@ def inference_vid(model,img_path,temp_frames_path,op_video_path):
 def inference(model,img_path):
 
     batch_tensor, orig_image,reshaped_img= preprocess_image(img_path)
-
+    torch.onnx.export(model,batch_tensor,'model.onnx')
+    print("succes?")
     #road = ID 0
     try:
         with torch.no_grad():
@@ -504,7 +505,6 @@ def main():
     OUTPUT_STRIDE = 8
     PATH_TO_PTH = "C:/Project/SemanticTester/DeepLabV3Plus-Pytorch/best_deeplabv3plus_resnet101_cityscapes_os16.pth"
 
-
     model = modeling.__dict__[MODEL_NAME](num_classes=NUM_CLASSES, output_stride=OUTPUT_STRIDE)
     model.load_state_dict(torch.load( PATH_TO_PTH, map_location='cpu',weights_only=False)['model_state'])
     print("entering meta mode")
@@ -515,6 +515,7 @@ def main():
     #annotation function##
 
     ##train function##
+    ##train function expects parent folder with sub image and sub tensor folders with number IDs
     # model.train()
     # criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
     # optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -525,9 +526,9 @@ def main():
     ##!INFERENCE FUNCTION##
     frame_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-16-45-44/2025-06-06-16-45-53.419261.jpg"
     model.eval()
-
+    
     smple_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-07-12-14-29"
-    #inference_vid(model,smple_path,temp_frames_path="C:/Project/SemanticTester/tempFrameim",op_video_path="C:/Project/SemanticTester/output/vid.mp4")
+    inference_vid(model,smple_path,temp_frames_path="C:/Project/SemanticTester/tempFrameim",op_video_path="C:/Project/SemanticTester/output/vid.mp4")
     img1,discrete_cntrPoints,InterpolatedCntrPoints=inference(model,frame_path)
     
     plt.imshow(img1); plt.show()
