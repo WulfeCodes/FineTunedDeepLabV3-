@@ -1,12 +1,10 @@
-import torch
 import numpy as np
 import casadi as ca
-#TODO casadi symbolic w euler integration, 
-#TODO define cost function,
+#TODO Q and R tuning analysis with constraints
 #TODO implement acados
 #casadi+acodos
 def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
-                      X,U, F_xf, F_xr):
+                      X,U, F_xf):
     
     x, y, V_x, V_y, yaw, r = X[0], X[1], X[2], X[3], X[4], X[5]
     steering_angle, control_accel = U[0], U[1]
@@ -21,7 +19,7 @@ def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
     F_xr = control_accel * mass
 
 
-    r_dot = 1/I_z * (L_f * (F_yf * ca.cos(steering_angle) + F_xf * ca.sin(steering_angle)) - L_r * F_yr)
+    r_dot = 1/I_z * (L_f * (F_yf * ca.cos(steering_angle)) - L_r * F_yr)
 
     x_dot_g  = V_x * ca.cos(yaw) - V_y * ca.sin(yaw)
     y_dot_g = V_x * ca.sin(yaw) + V_y * ca.cos(yaw)
@@ -54,11 +52,16 @@ def create_symbolicVectors():
     U = ca.vertcat(steer, a)
     return X, U
 
-def step(X,f_dyn,dt):
-    return X + f_dyn * dt
+def step(X, U, f_dyn, dt):
+    return X + dt * f_dyn(X, U)
 
-def create_costFunction():
-    pass
+def create_costFunction(X,U,X_ref, U_ref, Q,R):
+    state_error = X - X_ref
+    ip_error = U - U_ref
+    cost = ca.mtimes([state_error.T],Q, state_error) + ca.mtimes(ip_error.T,R,ip_error)
+    return ca.Function("cost_func",[X,U],[cost])
+    #how should Q and R be tuned?
+
 
 
 def main():
@@ -87,6 +90,11 @@ def main():
     r = 0.0
     dt = .01
 
+    #TODO these need to be changed per the problem statemt
+    Q = ca.diag([10, 10, 1, 1, 1, 1])  # State cost
+    R = ca.diag([1, 1])                # Input cost
+    X_ref = ca.DM([5, 5, 0, 0, 0, 0])  # Desired state
+    U_ref = ca.DM([0, 0])             # Desired control
     # Control inputs
     steering_angle = 0.0  # rad
     control_accel = 0.5  # m/s²
@@ -98,8 +106,8 @@ def main():
     f=create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
                       X,U, F_xf)
     f_dyn = ca.Function("f_dyn", [X, U], [f])
-    x_next=step(X,f_dyn,dt)
-    create_costFunction()
+    x_next=step(X,U,f_dyn,dt)
+    cost_function=create_costFunction(X,U,X_ref, U_ref, Q,R)
 
 if __name__ == '__main__':
     main()
