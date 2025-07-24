@@ -1,12 +1,14 @@
 import numpy as np
 import casadi as ca
+from casadi import *
+import matplotlib.pyplot as plt
 #TODO Q and R tuning analysis with constraints
-#TODO implement acados
+#TODO implement acados/qpoases/odys/forces pro
 #casadi+acodos
 def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
                       X,U, F_xf):
     
-    x, y, V_x, V_y, yaw, r = X[0], X[1], X[2], X[3], X[4], X[5]
+    x,y, V_x, V_y, yaw, r = X[0], X[1], X[2], X[3], X[4], X[5]
     steering_angle, control_accel = U[0], U[1]
     fwd_slipAngle=steering_angle - ca.arctan(V_y + L_f * r/V_x)
     rear_slipAngle = - ca.arctan(V_y - L_r * r/V_x)
@@ -57,12 +59,20 @@ def step(X, U, f_dyn, dt):
 
 def create_costFunction(X,U,X_ref, U_ref, Q,R):
     state_error = X - X_ref
+    #u_ref should typically be defined as U_prev
     ip_error = U - U_ref
-    cost = ca.mtimes([state_error.T],Q, state_error) + ca.mtimes(ip_error.T,R,ip_error)
+    #no terminal cost here 
+    cost = ca.mtimes([state_error.T,Q, state_error]) + ca.mtimes([ip_error.T,R,ip_error])
+    #ca.Function is parameterized by list of input deps and output
+    #creates the computation graph linking them
+    #done here and with the state space function
     return ca.Function("cost_func",[X,U],[cost])
+
     #how should Q and R be tuned?
 
-
+def create_trackCoordinates():
+    pass
+    #frenet definition
 
 def main():
     mass = 12
@@ -109,5 +119,23 @@ def main():
     x_next=step(X,U,f_dyn,dt)
     cost_function=create_costFunction(X,U,X_ref, U_ref, Q,R)
 
+    #time horizon is defined to be 10 here, 
+    # 40 would be around upper bound of irl case
+    opti=Opti()
+    time_horizon = 10
+    u_opti=opti.variable(2,time_horizon)
+    x_opti = opti.variable(6,time_horizon+1)
+    #constraint definitions
+    #steering angle and acceleration bounds
+        
+    opti.subject_to(opti.bounded(-3,u_opti[0,:],2))
+    opti.subject_to(opti.bounded(-0.5,u_opti[1,:],.5))
+
+    #how should state constraints be defined?
+    print("successfully created optimizer variable")
+
+    traj_coords=create_trackCoordinates()
+
+    #simulation loop:
 if __name__ == '__main__':
     main()
