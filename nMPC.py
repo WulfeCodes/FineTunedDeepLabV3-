@@ -71,8 +71,55 @@ def create_costFunction(X,U,X_ref, U_ref, Q,R):
     #how should Q and R be tuned?
 
 def create_trackCoordinates():
-    pass
+    #semi major and minor for x,y in ellipse
+    a  = 20
+    b = 10
+    s = np.linspace(0,2 * np.pi, 500)
+    x_ref = a * np.cos(s)
+    y_ref = b * np.sin(s)
+
+    #make some heading angle
+    #dy/ds, #dx/ds
+    dx = - a * np.sin(s)
+    dy = b * np.cos(s)
+    angle_ref=np.arctan2(dy,dx)
+    #normalize tangent vector for longitudinal error
+    T_hat = (1/np.sqrt((dx)**2 + (dy)**2)) * np.array([dx,dy])
+    N_hat = (1/np.sqrt((dx)**2 + (dy)**2)) * np.array([-dy,dx])
+    #TODO make this continuous 
+    angle_ref = np.arctan2(T_hat[1],T_hat[0])
+    #plt.figure(figsize=(6, 6))
+    #plt.plot(x_ref, y_ref, label="Reference Trajectory (Ellipse)")
+    #plt.xlabel("x")
+    #plt.ylabel("y")
+    #plt.title("Elliptical Raceline")
+    #plt.axis('equal')
+    #plt.grid(True)
+    #plt.legend()
+    #plt.show()
+    #plot
+    return x_ref,y_ref,s,a,b
+
     #frenet definition
+    #reference point is always a reference point ahead delS or delt
+def createStartVector(arcStart,a,b):
+    xStart = a * np.cos(arcStart)
+    yStart = b * np.sin(arcStart)
+    vX = -a * np.sin(arcStart)
+    vY = b * np.cos(arcStart)
+    v = np.sqrt(np.square(vX)+np.square(vY))
+
+    aX = - a * np.cos(arcStart)
+    aY = - b * np.cos(arcStart)
+
+    yaw = np.arctan2(vY,vX)
+    Tangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([vX,vY])
+    dTangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([aX,aY])
+    k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
+    r = k * v
+    return ca.vertcat(xStart,yStart,vX,vY,yaw,r)
+def computeDesiredVector():
+    pass
 
 def main():
     mass = 12
@@ -134,8 +181,35 @@ def main():
     #how should state constraints be defined?
     print("successfully created optimizer variable")
 
-    traj_coords=create_trackCoordinates()
+    x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
+    Xstart=createStartVector(arc_ref[0],a,b)
+    #X_err:[err_x,err_y,vx_curr-vx_prev,vy_curr-vy_prev,r,yaw]
+    #TODO how should Verr and r error be defined?
+    #Goal: simulation loop:
+    #define desired coordinates of the tangent and normal
+    #make sure these are always in some forward progression
+    #da kurvature = |T(s) x T'(s)| w T being normalized
+    
+    Vx_des = 1.5
+    Vy_des = 0
 
-    #simulation loop:
+    T = 500
+    for i in range(T):
+
+        for j in range(time_horizon):
+            if i and j ==0:
+                x_opti[:,j]=Xstart
+                u_opti[:,j]=[0,0]
+                nextX=step(x_opti[:,0],f,u_opti[:,0])
+                opti.subject_to(x_opti[:,j+1]==nextX)
+
+                computeDesiredVector()
+
+                cost_function()   
+            else:
+                pass
+                #define it to be the currStateVector
+
+
 if __name__ == '__main__':
     main()
