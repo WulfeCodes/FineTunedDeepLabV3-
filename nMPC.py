@@ -10,8 +10,8 @@ def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
     
     x,y, V_x, V_y, yaw, r = X[0], X[1], X[2], X[3], X[4], X[5]
     steering_angle, control_accel = U[0], U[1]
-    fwd_slipAngle=steering_angle - ca.arctan(V_y + L_f * r/V_x)
-    rear_slipAngle = - ca.arctan(V_y - L_r * r/V_x)
+    fwd_slipAngle=steering_angle - ca.arctan((V_y + L_f * r)/V_x)
+    rear_slipAngle = - ca.arctan((V_y - L_r * r)/V_x)
     #PacejkaMagicFormula
     #B = stiffness
     #C = shape factor
@@ -29,9 +29,9 @@ def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
     nonInertial_xAccel = 1/mass *(F_xf * ca.cos(steering_angle) - F_yf * ca.sin(steering_angle) + F_xr) + r* V_y
     nonInertial_yAccel= 1/mass * (F_yf * ca.cos(steering_angle) + F_xf * ca.sin(steering_angle) + F_yr) - r * V_x
 
-    f = ca.vertcat(x_dot_g, y_dot_g, nonInertial_xAccel, nonInertial_yAccel, r, r_dot)
+    X_DOT = ca.vertcat(x_dot_g, y_dot_g, nonInertial_xAccel, nonInertial_yAccel, r, r_dot)
     
-    return f
+    return X_DOT
 
 def create_symbolicVectors():
     # Number of states and inputs
@@ -58,6 +58,10 @@ def step(X, U, f_dyn, dt):
     return X + dt * f_dyn(X, U)
 
 def create_costFunction(X,U,X_ref, U_ref, Q,R):
+    Q = ca.diag([10, 10, 1, 1, 1, 1])  # State cost
+    R = ca.diag([1, 1])                # Input cost
+
+
     state_error = X - X_ref
     #u_ref should typically be defined as U_prev
     ip_error = U - U_ref
@@ -118,8 +122,121 @@ def createStartVector(arcStart,a,b):
     k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
     r = k * v
     return ca.vertcat(xStart,yStart,vX,vY,yaw,r)
-def computeDesiredVector():
-    pass
+
+def computeDesiredVector(arc, a,b,Xnext):
+    xDes = a * np.cos(arc)
+    yDes = b * np.sin(arc)
+    vX = -a * np.sin(arc)
+    vY = b * np.cos(arc)
+    aX = - a * np.cos(arc)
+    aY = - b * np.cos(arc)
+
+    v = np.sqrt(np.square(vX)+np.square(vY))
+    tanVector = np.array([vX,vY])
+    dtanVector = np.array([aX,aY])
+    normalVector = np.array([-vY,vX])
+
+    k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
+    r = k * v
+    side_slip = np.arctan2(vY,vX)
+    Tangent_hat = 1/np.sqrt(vY**2 + vX**2) *  tanVector
+    dTangent_hat = 1/np.sqrt(vY**2 + vX**2) * dtanVector 
+
+    
+    xError = Xnext[0]-xDes
+    yError = Xnext[1]-yDes
+    vXerror = Xnext[2]-vX
+    vYerror = Xnext[3]-vY
+    yaw_err = Xnext[4] - side_slip
+
+    prjctdLongerr=tanVector @ np.array([xError,yError]).T
+    prjctdLaterr = normalVector @ np.array([xError,yError]).T
+
+
+    aX = - a * np.cos(arc)
+    aY = - b * np.cos(arc)
+
+    yaw = np.arctan2(vY,vX)
+    Tangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([vX,vY])
+    dTangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([aX,aY])
+    k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
+    r = k * v
+    
+    rerror = Xnext[5] - r
+    return ca.vertcat(prjctdLongerr,prjctdLaterr,vXerror,vYerror,yaw_err,rerror)
+    #compute velocity by dt, or by velocity at current 
+
+def create_optimizer_function(f_dyn,dt,time_horizon):
+    Q = ca.diag([10, 10, 1, 1, 1, 1])  # State cost
+    R = ca.diag([1, 1])                # Input cost
+
+    opti = Opti()
+
+
+    x_opti = opti.variable(6,time_horizon+1)
+    u_opti = opti.variable(2,time_horizon)
+    
+    opti.subject_to(opti.bounded(-3,u_opti[0,:],2))
+    opti.subject_to(opti.bounded(-0.5,u_opti[1,:],.5))
+    
+    #SHOULD WE CONSTRAIN END STATE AS WELL?
+    x0 = opti.parameter(6)
+    opti.subject_to(x_opti[:, 0] == x0)
+
+    x_des = opti.parameter(6,time_horizon+1)
+    u_des = opti.parameter(2,time_horizon)
+
+    cost  = 0
+
+    for i in range(time_horizon):
+        cost+=x_des[:,i].T @ Q @ x_des[:,i] + u_des[:,i].T @ R @ u_des[:,i]
+        xNext = step(x_opti[:,i], u_opti[:,i], f_dyn, dt)
+        opti.subject_to(x_opti[:,i+1]==xNext)
+
+    cost += x_des[:, -1].T @ Q @ x_des[:, -1]
+
+
+    solver_function = opti.to_function(
+            "mpc_solver", 
+            [x_des,u_des,x_opti[:,0]],u_opti)
+
+    return solver_function
+    #no set actual values yet, only in error params
+
+def sim(f_dyn,dt):
+
+    time_horizon = 10
+
+    x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
+    xCurr=createStartVector(arc_ref[0],a,b)
+
+    nextX=createStartVector(arc_ref[10],a,b)
+
+    num_des_x = np.zeros((6,time_horizon+1))
+    num_des_u = np.zeros((2,time_horizon))
+
+
+
+    optimizer=create_optimizer_function(f_dyn,dt,time_horizon)
+    
+    for i in range(40):
+
+        xCurrSim = xCurr
+        for j in range(time_horizon):
+            
+            if i == 0:
+                num_des_u[:,j]=np.array([0,0]).T
+                num_des_x[:,j]=computeDesiredVector(arc_ref[((i+1)*10)*(j+1)],a,b,xCurr)
+                xCurrSim = step(xCurrSim,num_des_u[:,j],f_dyn,dt)
+
+            else:
+                num_des_u[:,j]=U_actual[:,0]
+                num_des_x[:,j]=computeDesiredVector(arc_ref[((i+1)*10)*(j+1)],a,b,xCurr)
+                xCurrSim=step(xCurrSim,U_actual[:,0],f_dyn,dt)
+        
+        U_actual=optimizer(num_des_x,num_des_u,xCurr)
+        xCurr = step(xCurr,U_actual[:,0],f_dyn,dt)
+
 
 def main():
     mass = 12
@@ -148,8 +265,7 @@ def main():
     dt = .01
 
     #TODO these need to be changed per the problem statemt
-    Q = ca.diag([10, 10, 1, 1, 1, 1])  # State cost
-    R = ca.diag([1, 1])                # Input cost
+
     X_ref = ca.DM([5, 5, 0, 0, 0, 0])  # Desired state
     U_ref = ca.DM([0, 0])             # Desired control
     # Control inputs
@@ -160,56 +276,11 @@ def main():
     F_xf = 0.0
 
     X,U=create_symbolicVectors()
-    f=create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
+    X_DOT=create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
                       X,U, F_xf)
-    f_dyn = ca.Function("f_dyn", [X, U], [f])
+    f_dyn = ca.Function("f_dyn", [X, U], [X_DOT])
     x_next=step(X,U,f_dyn,dt)
-    cost_function=create_costFunction(X,U,X_ref, U_ref, Q,R)
-
-    #time horizon is defined to be 10 here, 
-    # 40 would be around upper bound of irl case
-    opti=Opti()
-    time_horizon = 10
-    u_opti=opti.variable(2,time_horizon)
-    x_opti = opti.variable(6,time_horizon+1)
-    #constraint definitions
-    #steering angle and acceleration bounds
-        
-    opti.subject_to(opti.bounded(-3,u_opti[0,:],2))
-    opti.subject_to(opti.bounded(-0.5,u_opti[1,:],.5))
-
-    #how should state constraints be defined?
-    print("successfully created optimizer variable")
-
-    x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
-    Xstart=createStartVector(arc_ref[0],a,b)
-    #X_err:[err_x,err_y,vx_curr-vx_prev,vy_curr-vy_prev,r,yaw]
-    #TODO how should Verr and r error be defined?
-    #Goal: simulation loop:
-    #define desired coordinates of the tangent and normal
-    #make sure these are always in some forward progression
-    #da kurvature = |T(s) x T'(s)| w T being normalized
-    
-    Vx_des = 1.5
-    Vy_des = 0
-
-    T = 500
-    for i in range(T):
-
-        for j in range(time_horizon):
-            if i and j ==0:
-                x_opti[:,j]=Xstart
-                u_opti[:,j]=[0,0]
-                nextX=step(x_opti[:,0],f,u_opti[:,0])
-                opti.subject_to(x_opti[:,j+1]==nextX)
-
-                computeDesiredVector()
-
-                cost_function()   
-            else:
-                pass
-                #define it to be the currStateVector
-
+    simulation(f_dyn,dt)
 
 if __name__ == '__main__':
     main()
