@@ -126,10 +126,17 @@ def create_symbolicVectors():
     return X, U
 
 def step(X, U, f_dyn, dt):
-    X_plusone=X + dt * f_dyn(X, U)
-    return X_plusone
+    # X_plusone=X + dt * f_dyn(X, U)
+    # return X_plusone
+    k1 = f_dyn(X, U)
+    k2 = f_dyn(X + 0.5 * dt * k1, U)
+    k3 = f_dyn(X + 0.5 * dt * k2, U)
+    k4 = f_dyn(X + dt * k3, U)
+    return X + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-def create_costFunction(X,U,X_ref, U_ref, Q,R):
+
+
+def create_costFUnction(X,U,X_ref, U_ref, Q,R):
     Q = ca.diag([10, 10, 1, 1, 1, 1])  # State cost
     R = ca.diag([1, 1])                # Input cost
 
@@ -195,6 +202,9 @@ def createStartVector(arcStart,a,b):
     r = k * v
     return ca.vertcat(xStart,yStart,vX,vY,yaw,r)
 
+def wrap_to_pi(angle):
+    return ca.atan2(ca.sin(angle), ca.cos(angle))
+
 def computeDesiredVector(arc, a,b,Xnext):
     xDes = a * np.cos(arc)
     yDes = b * np.sin(arc)
@@ -231,7 +241,7 @@ def computeDesiredVector(arc, a,b,Xnext):
 
     vXerror = Xnext[2]-vX
     vYerror = Xnext[3]-vY
-    yaw_err = Xnext[4] - side_slip
+    yaw_err = wrap_to_pi(Xnext[4] - side_slip)
 
 # Convert numpy arrays to tensors
 
@@ -261,7 +271,6 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     opti.subject_to(opti.bounded(-3,u_opti[0,:],2))
     opti.subject_to(opti.bounded(-0.5,u_opti[1,:],.5))
     
-    #SHOULD WE CONSTRAIN END STATE AS WELL?
     x0 = opti.parameter(6)
     opti.subject_to(x_opti[:, 0] == x0)
 
@@ -316,7 +325,17 @@ def sim(f_dyn,dt):
                 lossYArr.append(Yerr)
 
                 xCurrSim = step(xCurrSim,num_des_u[:,j],f_dyn,dt)
+            elif i>1:
+                num_des_u[:,j]=U_actual[:,0].full().flatten() - U_prev
+                U_prev = U_actual[:,0].full().flatten()
+                currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
+                num_des_x[:,j]=currErrVector.full().flatten()
+                lossXArr.append(Xerr)
+                lossYArr.append(Yerr)
+                xCurrSim=step(xCurrSim,U_actual[:,0],f_dyn,dt)
+                
             else:
+                U_prev = U_actual[:,0].full().flatten()
                 num_des_u[:,j]=U_actual[:,0].full().flatten()
                 currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
                 num_des_x[:,j]=currErrVector.full().flatten()
@@ -343,9 +362,9 @@ def main():
     L_r = 6
 
     #tire model parameters
-    B = 10
-    C= 1.3
-    D = 58.86
+    B = 5
+    C= 1.2
+    D = 30
     #B = stiffness
     #C = shape factor
     #D = peak lateral force
