@@ -2,16 +2,87 @@ import numpy as np
 import casadi as ca
 from casadi import *
 import matplotlib.pyplot as plt
+import torch
 #TODO Q and R tuning analysis with constraints
+#TODO fix iterator
 #TODO implement acados/qpoases/odys/forces pro
 #casadi+acodos
+
+def plot_loss(loss_values, title="Training Loss", xlabel="Iteration", ylabel="Loss", 
+              figsize=(10, 6), color='blue', grid=True, save_path=None):
+    """
+    Plot loss values over iterations/epochs
+    
+    Parameters:
+    -----------
+    loss_values : array-like
+        Array of loss values to plot
+    title : str
+        Title for the plot
+    xlabel : str  
+        Label for x-axis
+    ylabel : str
+        Label for y-axis
+    figsize : tuple
+        Figure size (width, height)
+    color : str
+        Color of the line
+    grid : bool
+        Whether to show grid
+    save_path : str, optional
+        Path to save the plot (e.g., 'loss_plot.png')
+    """
+    
+    # Ensure loss_values is 1D
+    loss_values = np.squeeze(np.array(loss_values))
+    if loss_values.ndim > 1:
+        loss_values = loss_values.flatten()
+    
+    plt.figure(figsize=figsize)
+    
+    # Create x-axis (iteration numbers)
+    iterations = range(len(loss_values))
+    
+    # Plot the loss
+    plt.plot(iterations, loss_values, color=color, linewidth=2, marker='o', markersize=3)
+    
+    # Customize the plot
+    plt.title(title, fontsize=16, fontweight='bold')
+    plt.xlabel(xlabel, fontsize=12)
+    plt.ylabel(ylabel, fontsize=12)
+    
+    if grid:
+        plt.grid(True, alpha=0.3)
+    
+    # Add some statistics as text
+    min_loss = np.min(loss_values)
+    min_idx = np.argmin(loss_values)
+    final_loss = loss_values[-1]
+    
+    stats_text = f'Min Loss: {min_loss:.4f} (iter {min_idx})\nFinal Loss: {final_loss:.4f}'
+    plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    
+    plt.show()
+
+
+
 def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
                       X,U, F_xf):
     
     x,y, V_x, V_y, yaw, r = X[0], X[1], X[2], X[3], X[4], X[5]
+
+    V_x_safe = ca.fmax(ca.fabs(V_x),1e-6)
+
     steering_angle, control_accel = U[0], U[1]
-    fwd_slipAngle=steering_angle - ca.arctan((V_y + L_f * r)/V_x)
-    rear_slipAngle = - ca.arctan((V_y - L_r * r)/V_x)
+    fwd_slipAngle=steering_angle - ca.arctan((V_y + L_f * r)/V_x_safe)
+    rear_slipAngle = - ca.arctan((V_y - L_r * r)/V_x_safe)
     #PacejkaMagicFormula
     #B = stiffness
     #C = shape factor
@@ -23,11 +94,11 @@ def create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
 
     r_dot = 1/I_z * (L_f * (F_yf * ca.cos(steering_angle)) - L_r * F_yr)
 
-    x_dot_g  = V_x * ca.cos(yaw) - V_y * ca.sin(yaw)
-    y_dot_g = V_x * ca.sin(yaw) + V_y * ca.cos(yaw)
+    x_dot_g  = V_x_safe * ca.cos(yaw) - V_y * ca.sin(yaw)
+    y_dot_g = V_x_safe * ca.sin(yaw) + V_y * ca.cos(yaw)
     
     nonInertial_xAccel = 1/mass *(F_xf * ca.cos(steering_angle) - F_yf * ca.sin(steering_angle) + F_xr) + r* V_y
-    nonInertial_yAccel= 1/mass * (F_yf * ca.cos(steering_angle) + F_xf * ca.sin(steering_angle) + F_yr) - r * V_x
+    nonInertial_yAccel= 1/mass * (F_yf * ca.cos(steering_angle) + F_xf * ca.sin(steering_angle) + F_yr) - r * V_x_safe
 
     X_DOT = ca.vertcat(x_dot_g, y_dot_g, nonInertial_xAccel, nonInertial_yAccel, r, r_dot)
     
@@ -55,7 +126,8 @@ def create_symbolicVectors():
     return X, U
 
 def step(X, U, f_dyn, dt):
-    return X + dt * f_dyn(X, U)
+    X_plusone=X + dt * f_dyn(X, U)
+    return X_plusone
 
 def create_costFunction(X,U,X_ref, U_ref, Q,R):
     Q = ca.diag([10, 10, 1, 1, 1, 1])  # State cost
@@ -78,7 +150,7 @@ def create_trackCoordinates():
     #semi major and minor for x,y in ellipse
     a  = 20
     b = 10
-    s = np.linspace(0,2 * np.pi, 500)
+    s = np.linspace(0,2 * np.pi, 5000)
     x_ref = a * np.cos(s)
     y_ref = b * np.sin(s)
 
@@ -132,38 +204,49 @@ def computeDesiredVector(arc, a,b,Xnext):
     aY = - b * np.cos(arc)
 
     v = np.sqrt(np.square(vX)+np.square(vY))
-    tanVector = np.array([vX,vY])
-    dtanVector = np.array([aX,aY])
-    normalVector = np.array([-vY,vX])
 
-    k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
-    r = k * v
+    tanVector = np.zeros((2,1))
+    dtanVector = np.zeros((2,1))
+    coordErrVector = np.zeros((2,1))
+    dtanVector = np.zeros((2,1))
+    normalRowVector = np.zeros((1,2))
+    tanRowVector = np.zeros((1,2))
+    dtanRowVector = np.zeros((1,2))
+
+    #TODO This needs to be optimized bad, too many creations
+    tanVector[0,0],tanVector[1,0]= vX, vY
+    tanRowVector[0,0],tanRowVector[0,1] = vX, vY
+    dtanRowVector[0,0],dtanRowVector[0,1] = aX, aY
+    dtanVector[0,0],dtanVector[1,0]= aX, aY
+    normalRowVector[0,0],normalRowVector[0,1]= -vY,vX
+    
     side_slip = np.arctan2(vY,vX)
     Tangent_hat = 1/np.sqrt(vY**2 + vX**2) *  tanVector
     dTangent_hat = 1/np.sqrt(vY**2 + vX**2) * dtanVector 
+    dTangent_hatRow = 1/np.sqrt(vY**2 + vX**2) * dtanRowVector
+    Tangent_hatRow = 1/np.sqrt(vY**2 + vX**2) * tanRowVector
+    normalRowVector = 1/np.sqrt(vY**2 + vX**2) * normalRowVector
 
-    
-    xError = Xnext[0]-xDes
-    yError = Xnext[1]-yDes
+    coordErrVector[0,0],coordErrVector[1,0] = Xnext[0]-xDes, Xnext[1]-yDes
+
     vXerror = Xnext[2]-vX
     vYerror = Xnext[3]-vY
     yaw_err = Xnext[4] - side_slip
 
-    prjctdLongerr=tanVector @ np.array([xError,yError]).T
-    prjctdLaterr = normalVector @ np.array([xError,yError]).T
+# Convert numpy arrays to tensors
 
-
+    prjctdLongerr = Tangent_hatRow @ coordErrVector
+    prjctdLaterr = normalRowVector @ coordErrVector
     aX = - a * np.cos(arc)
     aY = - b * np.cos(arc)
 
     yaw = np.arctan2(vY,vX)
-    Tangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([vX,vY])
-    dTangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([aX,aY])
-    k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
+    k=Tangent_hat[0,0] * dTangent_hat[1,0] - dTangent_hat[0,0] * Tangent_hat[1,0]
     r = k * v
+    print("shapes computed")
     
     rerror = Xnext[5] - r
-    return ca.vertcat(prjctdLongerr,prjctdLaterr,vXerror,vYerror,yaw_err,rerror)
+    return ca.vertcat(prjctdLongerr,prjctdLaterr,vXerror,vYerror,yaw_err,rerror),prjctdLongerr,prjctdLaterr
     #compute velocity by dt, or by velocity at current 
 
 def create_optimizer_function(f_dyn,dt,time_horizon):
@@ -171,7 +254,6 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     R = ca.diag([1, 1])                # Input cost
 
     opti = Opti()
-
 
     x_opti = opti.variable(6,time_horizon+1)
     u_opti = opti.variable(2,time_horizon)
@@ -195,17 +277,19 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
 
     cost += x_des[:, -1].T @ Q @ x_des[:, -1]
 
+    opti.minimize(cost)
+    opti.solver('ipopt')
 
-    solver_function = opti.to_function(
-            "mpc_solver", 
-            [x_des,u_des,x_opti[:,0]],u_opti)
-
+    solver_function = opti.to_function('mpc_solver',[x_des,u_des,x0],[u_opti])
+    print("saved comp function")
     return solver_function
     #no set actual values yet, only in error params
 
 def sim(f_dyn,dt):
+    lossXArr = []
+    lossYArr = []
 
-    time_horizon = 10
+    time_horizon = 30
 
     x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
     xCurr=createStartVector(arc_ref[0],a,b)
@@ -218,7 +302,7 @@ def sim(f_dyn,dt):
 
 
     optimizer=create_optimizer_function(f_dyn,dt,time_horizon)
-    
+    err = 0
     for i in range(40):
 
         xCurrSim = xCurr
@@ -226,17 +310,26 @@ def sim(f_dyn,dt):
             
             if i == 0:
                 num_des_u[:,j]=np.array([0,0]).T
-                num_des_x[:,j]=computeDesiredVector(arc_ref[((i+1)*10)*(j+1)],a,b,xCurr)
-                xCurrSim = step(xCurrSim,num_des_u[:,j],f_dyn,dt)
+                currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
+                num_des_x[:,j]=currErrVector.full().flatten()
+                lossXArr.append(Xerr)
+                lossYArr.append(Yerr)
 
+                xCurrSim = step(xCurrSim,num_des_u[:,j],f_dyn,dt)
             else:
-                num_des_u[:,j]=U_actual[:,0]
-                num_des_x[:,j]=computeDesiredVector(arc_ref[((i+1)*10)*(j+1)],a,b,xCurr)
+                num_des_u[:,j]=U_actual[:,0].full().flatten()
+                currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
+                num_des_x[:,j]=currErrVector.full().flatten()
+                lossXArr.append(Xerr)
+                lossYArr.append(Yerr)
                 xCurrSim=step(xCurrSim,U_actual[:,0],f_dyn,dt)
-        
+        print(f"ran {i +1} times")
+        print(f"x_des has NaN: {np.isnan(num_des_x).any()}")
+        print(f"u_des has NaN: {np.isnan(num_des_u).any()}")
+        print(f"x0 has NaN: {np.isnan(xCurr).any()}")
         U_actual=optimizer(num_des_x,num_des_u,xCurr)
         xCurr = step(xCurr,U_actual[:,0],f_dyn,dt)
-
+    return lossXArr,lossYArr
 
 def main():
     mass = 12
@@ -263,14 +356,11 @@ def main():
     yaw = 0.0
     r = 0.0
     dt = .01
-
     #TODO these need to be changed per the problem statemt
+    lossXArr=[]
+    lossYArr=[]
 
-    X_ref = ca.DM([5, 5, 0, 0, 0, 0])  # Desired state
-    U_ref = ca.DM([0, 0])             # Desired control
     # Control inputs
-    steering_angle = 0.0  # rad
-    control_accel = 0.5  # m/s²
 
     # Forces
     F_xf = 0.0
@@ -279,8 +369,9 @@ def main():
     X_DOT=create_stateSpace(I_z,mass,L_f, L_r,B,C,D,
                       X,U, F_xf)
     f_dyn = ca.Function("f_dyn", [X, U], [X_DOT])
-    x_next=step(X,U,f_dyn,dt)
-    simulation(f_dyn,dt)
+    lossXArr,lossYArr=sim(f_dyn,dt)
+    plot_loss(lossXArr,"Longitudinal Positional Diff")
+    plot_loss(lossYArr,'Lateral Positional Diff')
 
 if __name__ == '__main__':
     main()
