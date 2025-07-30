@@ -255,8 +255,7 @@ def computeDesiredVector(arc, a,b,Xnext):
     r = k * v
     print("shapes computed")
     
-    rerror = Xnext[5] - r
-    return ca.vertcat(prjctdLongerr,prjctdLaterr,vXerror,vYerror,yaw_err,rerror),prjctdLongerr,prjctdLaterr
+    return ca.vertcat(xDes,yDes,vX,vY,side_slip,r),prjctdLongerr,prjctdLaterr
     #compute velocity by dt, or by velocity at current 
 
 def create_optimizer_function(f_dyn,dt,time_horizon):
@@ -279,17 +278,24 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
 
     cost  = 0
 
+
     for i in range(time_horizon):
-        cost+=x_des[:,i].T @ Q @ x_des[:,i] + u_des[:,i].T @ R @ u_des[:,i]
+        state_err = x_opti[:,i] - x_des[:,i]
+        #state_err[:2,]
+        input_err = u_opti[:,i] - u_des[:,i]
+        
+
+        cost += state_err.T @ Q @ state_err + input_err.T @ R @ input_err        
         xNext = step(x_opti[:,i], u_opti[:,i], f_dyn, dt)
         opti.subject_to(x_opti[:,i+1]==xNext)
 
-    cost += x_des[:, -1].T @ Q @ x_des[:, -1]
+        final_err = x_opti[:, -1] - x_des[:, -1]
+        cost += final_err.T @ Q @ final_err
 
     opti.minimize(cost)
     opti.solver('ipopt')
 
-    solver_function = opti.to_function('mpc_solver',[x_des,u_des,x0],[u_opti])
+    solver_function = opti.to_function('mpc_solver',[x_opti,x_des,u_opti,u_des,x0],[u_opti])
     print("saved comp function")
     return solver_function
     #no set actual values yet, only in error params
@@ -298,7 +304,7 @@ def sim(f_dyn,dt):
     lossXArr = []
     lossYArr = []
 
-    time_horizon = 30
+    time_horizon = 10
 
     x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
     xCurr=createStartVector(arc_ref[0],a,b)
@@ -308,45 +314,46 @@ def sim(f_dyn,dt):
     num_des_x = np.zeros((6,time_horizon+1))
     num_des_u = np.zeros((2,time_horizon))
 
-
+    num_opti_x = np.zeros((6,time_horizon+1))
+    U_actual = np.zeros((2,time_horizon))
 
     optimizer=create_optimizer_function(f_dyn,dt,time_horizon)
     err = 0
-    for i in range(40):
+    for i in range(400):
 
         xCurrSim = xCurr
         for j in range(time_horizon):
             
             if i == 0:
+                if j == 0:
+                    U_prev=np.array([0,0]).T
+
                 num_des_u[:,j]=np.array([0,0]).T
+                U_actual[:,j]=np.array([0,0]).T
                 currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
+                num_opti_x[:,j] = xCurr.full().flatten()
                 num_des_x[:,j]=currErrVector.full().flatten()
                 lossXArr.append(Xerr)
                 lossYArr.append(Yerr)
 
                 xCurrSim = step(xCurrSim,num_des_u[:,j],f_dyn,dt)
-            elif i>1:
-                num_des_u[:,j]=U_actual[:,0].full().flatten() - U_prev
-                U_prev = U_actual[:,0].full().flatten()
-                currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
-                num_des_x[:,j]=currErrVector.full().flatten()
-                lossXArr.append(Xerr)
-                lossYArr.append(Yerr)
-                xCurrSim=step(xCurrSim,U_actual[:,0],f_dyn,dt)
-                
             else:
-                U_prev = U_actual[:,0].full().flatten()
-                num_des_u[:,j]=U_actual[:,0].full().flatten()
+                if j ==0:
+                    num_des_u[:,j]=U_prev
+                    U_prev = U_actual[:,0].full().flatten()
+
+                else:
+                    num_des_u[:,j]=U_actual[:,j-1].full().flatten()
+
                 currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[((i+1)*10)+((j+1)*10)],a,b,xCurr)
+                num_opti_x[:,j] = xCurr.full().flatten()
                 num_des_x[:,j]=currErrVector.full().flatten()
                 lossXArr.append(Xerr)
                 lossYArr.append(Yerr)
-                xCurrSim=step(xCurrSim,U_actual[:,0],f_dyn,dt)
+                xCurrSim=step(xCurrSim,U_actual[:,j],f_dyn,dt)
+                
         print(f"ran {i +1} times")
-        print(f"x_des has NaN: {np.isnan(num_des_x).any()}")
-        print(f"u_des has NaN: {np.isnan(num_des_u).any()}")
-        print(f"x0 has NaN: {np.isnan(xCurr).any()}")
-        U_actual=optimizer(num_des_x,num_des_u,xCurr)
+        U_actual=optimizer(num_opti_x,num_des_x,U_actual,num_des_u,xCurr)
         xCurr = step(xCurr,U_actual[:,0],f_dyn,dt)
     return lossXArr,lossYArr
 
