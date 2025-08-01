@@ -268,6 +268,7 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     u_opti = opti.variable(2,time_horizon)
     
     x0 = opti.parameter(6)
+
     max_steer_rad = 0.4  # approx 23 degrees
     max_accel_ms2 = 3.0
 
@@ -279,11 +280,27 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
 
     x_des = opti.parameter(6,time_horizon+1)
     u_des = opti.parameter(2,time_horizon)
+    tan = opti.parameter(1,2)
+    normal = opti.parameter(1,2)
+    err_prj = opti.parameter(2)
 
     cost  = 0
 
     for i in range(time_horizon):
         state_err = x_opti[:,i] - x_des[:,i]
+
+        #frenet frame logic, current vX and vY are in the body frame
+        #rotation
+        tan[0,0]=ca.cos(x_des[-2,i]) * x_des[2,i] - ca.sin(x_des[-2,i]) * x_des[3,i]
+        tan[0,1]=ca.sin(x_des[-2,i]) * x_des[2,i] +  ca.cos(x_des[2,i]) * x_des[3,i]
+        tan/=(tan[0,1]**2+tan[0,0]**2)**(1/2)
+        normal[0,0]=-tan[0,1]
+        normal[0,1]=tan[0,0]
+        err_prj[0]=tan @ state_err[:2]
+        err_prj[1]= normal @ state_err[:2]
+        state_err[0]=err_prj[0]
+        state_err[1]=err_prj[1]
+
         #state_err[:2,]
         input_err = u_opti[:,i] - u_des[:,i]
         
