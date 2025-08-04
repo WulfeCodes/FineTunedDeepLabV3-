@@ -72,6 +72,49 @@ def plot_loss(loss_values, title="Training Loss", xlabel="Iteration", ylabel="Lo
     
     plt.show()
 
+
+def plotter(x_values, y_values, title):
+    if len(x_values) != len(y_values):
+        raise ValueError("x_values and y_values must be the same length.")
+    
+    plt.figure(figsize=(8, 5))
+    plt.plot(x_values, y_values, marker='o', linestyle='-')
+    plt.title(title)
+    plt.xlabel('X Axis')
+    plt.ylabel('Y Axis')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_actual_vs_desired(actual_x, actual_y, desired_x, desired_y, title):
+    # Safety check
+    if not (len(actual_x) == len(actual_y) and len(desired_x) == len(desired_y)):
+        raise ValueError("Coordinate lists must be of equal length.")
+
+    plt.figure(figsize=(8, 6))
+    
+    # Plot paths
+    plt.plot(actual_x, actual_y, 'bo-', label='Actual Path')    # blue line + circles
+    plt.plot(desired_x, desired_y, 'r*-', label='Desired Path') # red line + stars
+    
+    # Plot start points
+    plt.plot(actual_x[0], actual_y[0], 'go', markersize=10, label='Start (Actual)')
+    plt.plot(desired_x[0], desired_y[0], 'g*', markersize=12, label='Start (Desired)')
+    
+    # Plot end points
+    plt.plot(actual_x[-1], actual_y[-1], 'ks', markersize=10, label='End (Actual)')
+    plt.plot(desired_x[-1], desired_y[-1], 'kX', markersize=12, label='End (Desired)')
+    
+    plt.title(title)
+    plt.xlabel('X')
+    plt.ylabel('Y')
+    plt.legend()
+    plt.grid(True)
+    plt.axis('equal')  # Maintains aspect ratio
+    plt.tight_layout()
+    plt.show()
+
 def create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
                       X,U, F_xr):
     
@@ -90,14 +133,15 @@ def create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
     F_yf = max_force * ca.tanh(fwd_slipAngle/saturation_slip)
     F_xf = control_accel * mass
 
+    #=L_f * (F_yf * cos(steering_angle) - F_xf * sin(steering_angle)) 0 L_r * F_yr
 
-    r_dot = 1/I_z * (L_f * (F_yf * ca.cos(steering_angle)) - L_r * F_yr)
+    r_dot = 1/I_z * (L_f * (F_yf * cos(steering_angle) - F_xf * sin(steering_angle)) - L_r * F_yr)
 
     x_dot_g  = V_x_safe * ca.cos(yaw) - V_y * ca.sin(yaw)
     y_dot_g = V_x_safe * ca.sin(yaw) + V_y * ca.cos(yaw)
     
-    nonInertial_xAccel = 1/mass *(F_xf * ca.cos(steering_angle) - F_yf * ca.sin(steering_angle) + F_xr) + r* V_y
-    nonInertial_yAccel= 1/mass * (F_yf * ca.cos(steering_angle) + F_xf * ca.sin(steering_angle) + F_yr) - r * V_x_safe
+    nonInertial_xAccel = 1/mass *(F_xf * ca.cos(steering_angle) + F_yf * ca.sin(steering_angle) + F_xr) - r* V_y
+    nonInertial_yAccel= 1/mass * (F_yf * ca.cos(steering_angle) - F_xf * ca.sin(steering_angle) + F_yr) + r * V_x_safe
 
     X_DOT = ca.vertcat(x_dot_g, y_dot_g, nonInertial_xAccel, nonInertial_yAccel, r, r_dot)
     
@@ -177,8 +221,6 @@ def createStartVector(arcStart,a,b):
     v = np.sqrt(np.square(vX)+np.square(vY))
     vX_ = vX * np.cos(yaw) + np.sin(yaw) * vY
     vY_ = vX * -np.sin(yaw) + np.cos(yaw) * vY
-    vX = vX_
-    vY = vY_
 
     aX = - a * np.cos(arcStart)
     aY = - b * np.cos(arcStart)
@@ -187,7 +229,7 @@ def createStartVector(arcStart,a,b):
     dTangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([aX,aY])
     k=Tangent_hat[0] * dTangent_hat[1] - dTangent_hat[0] * Tangent_hat[1]
     r = k * v
-    return ca.vertcat(xStart,yStart,vX,vY,yaw,r)
+    return ca.vertcat(xStart,yStart,vX_,vY_,yaw,r)
 
 def wrap_to_pi(angle):
     return ca.atan2(ca.sin(angle), ca.cos(angle))
@@ -245,7 +287,6 @@ def computeDesiredVector(arc, a,b,Xnext):
 
     k=Tangent_hat[0,0] * dTangent_hat[1,0] - dTangent_hat[0,0] * Tangent_hat[1,0]
     r = k * v
-    print("shapes computed")
     
     return ca.vertcat(xDes,yDes,vX,vY,yaw,r),prjctdLongerr,prjctdLaterr
     #compute velocity by dt, or by velocity at current 
@@ -275,6 +316,7 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     opti.subject_to(opti.bounded(-max_steer_rad, u_opti[0,:], max_steer_rad))
     opti.subject_to(opti.bounded(-max_accel_ms2, u_opti[1,:], max_accel_ms2))
     opti.subject_to(x_opti[:, 0] == x0)
+
     opti.subject_to(opti.bounded(0.1, x_opti[2, :], 15.0))  # Vx
     opti.subject_to(opti.bounded(-5.0, x_opti[3, :], 5.0))  # Vy 
 
@@ -319,17 +361,19 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     return solver_function
     #no set actual values yet, only in error params
 
-def scale(x,u,scales):
+def scale(x,scales,u=None,flag=False):
     x[0,:] /= scales['x']
     x[1,:] /= scales['y']
     x[2,:] /= scales['x']
     x[3,:] /= scales['y']
     x[4,:] /= scales['yaw']
     x[5,:] /= scales['r']
-    u[0,:] /= scales['delta']
-    u[1,:] /=scales['a']
-    return x,u
 
+    if flag:
+        u[0,:] /= scales['delta']
+        u[1,:] /=scales['a']
+        return x,u
+    return x
 def sim(f_dyn,dt,scales):
     lossXArr = []
     lossYArr = []
@@ -338,8 +382,19 @@ def sim(f_dyn,dt,scales):
     actual_y_coords = []
     desired_x_coords = []
     desired_y_coords = []
+    plot_steering_angle = []
+    plot_control_accel = []
 
-    time_horizon = 10
+    velocityX_chosen = []
+    velocityY_chosen = []
+    velocityX_des = []
+    velocityY_des = []
+    yaw_chosen = []
+    r_chosen = []
+    yaw_desired = []
+    r_desired = []
+
+    time_horizon = 30
 
     x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
     xCurr=createStartVector(arc_ref[0],a,b)
@@ -361,7 +416,7 @@ def sim(f_dyn,dt,scales):
         actual_x_coords.append(xCurr[0].full().item())
         actual_y_coords.append(xCurr[1].full().item())
         for j in range(time_horizon):
-            arc_idx=(((i+1)*2)+((j+1)*2))%len(arc_ref)
+            arc_idx=(((i+1)*5)+((j+1)*5))%len(arc_ref)
 
             if i == 0:
 
@@ -378,6 +433,11 @@ def sim(f_dyn,dt,scales):
                     U_prev=np.array([0,0]).T
                     desired_x_coords.append(currErrVector[0].full().item())
                     desired_y_coords.append(currErrVector[1].full().item())
+                    velocityX_des.append(currErrVector[2].full().flatten())
+                    velocityY_des.append(currErrVector[3].full().flatten())
+                    r_desired.append(currErrVector[-1].full().flatten())
+                    yaw_desired.append(currErrVector[-2].full().flatten())
+
             else:
 
                 currErrVector,Xerr,Yerr=computeDesiredVector(arc_ref[arc_idx],a,b,xCurr)
@@ -392,12 +452,17 @@ def sim(f_dyn,dt,scales):
                     U_prev = U_actual[:,0].full().flatten()
                     desired_x_coords.append(currErrVector[0].full().item())
                     desired_y_coords.append(currErrVector[1].full().item())
+                    velocityX_des.append(currErrVector[2].full().flatten())
+                    velocityY_des.append(currErrVector[3].full().flatten())
+                    r_desired.append(currErrVector[-1].full().flatten())
+                    yaw_desired.append(currErrVector[-2].full().flatten())
 
                 else:
                     num_des_u[:,j]=U_actual[:,j-1].full().flatten()
                 
         print(f"ran {i +1} times")
-        des_x,des_u=scale(num_des_x,num_des_u,scales)
+        des_x,des_u=scale(num_des_x,scales,num_des_u,flag=True)
+        x_scaled = scale(x=xCurr,scales=scales)
         U_actual=optimizer(des_x,des_u,xCurr)
 
         U_actual[0,:] *= scales['delta']
@@ -405,6 +470,19 @@ def sim(f_dyn,dt,scales):
 
         xCurr = step(xCurr,U_actual[:,0],f_dyn,dt)
 
+        plot_control_accel.append(U_actual[0,1].full().flatten())
+        plot_steering_angle.append(U_actual[0,0].full().flatten())
+
+        yaw_chosen.append(xCurr[-2].full().flatten())
+        r_chosen.append(xCurr[-1].full().flatten())
+
+        velocityX_chosen.append(xCurr[2].full().flatten())
+        velocityY_chosen.append(xCurr[3].full().flatten())
+        
+    plot_actual_vs_desired(velocityX_chosen,velocityY_chosen,velocityX_des,velocityY_des,"Velocities")
+    plot_actual_vs_desired(yaw_chosen,r_chosen,yaw_desired,r_desired,"angle plotS")
+    plotter(plot_steering_angle,plot_control_accel,"Steering and Control ")
+    #TODO plot prev states
     #plot code
     print("LENGTH CHECK",len(desired_x_coords),len(desired_y_coords))
     print(f"RANGE CHECK: des x: {max(desired_x_coords)-min(desired_x_coords)},des y: {max(desired_y_coords)-min(desired_y_coords)}")
