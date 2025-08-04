@@ -120,8 +120,7 @@ def create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
     
     
     x,y, V_x, V_y, yaw, r = X[0], X[1], X[2], X[3], X[4], X[5]
-
-    V_x_safe = ca.fmax(ca.fabs(V_x),.1)
+    V_x_safe = ca.if_else(ca.fabs(V_x) < 0.1, 0.1, V_x)
 
     steering_angle, control_accel = U[0], U[1]
     fwd_slipAngle=steering_angle - ca.arctan((V_y + L_f * r)/V_x_safe)
@@ -144,8 +143,8 @@ def create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
     nonInertial_yAccel= 1/mass * (F_yf * ca.cos(steering_angle) - F_xf * ca.sin(steering_angle) + F_yr) + r * V_x_safe
 
     X_DOT = ca.vertcat(x_dot_g, y_dot_g, nonInertial_xAccel, nonInertial_yAccel, r, r_dot)
-    
-    return X_DOT
+    return X_DOT, ca.Function("kys",[X,U],[F_xf,F_yf,F_yr])
+
 
 def create_symbolicVectors():
     # Number of states and inputs
@@ -217,13 +216,14 @@ def createStartVector(arcStart,a,b):
     vX = -a * np.sin(arcStart)
     vY = b * np.cos(arcStart)
     yaw = np.arctan2(vY,vX)
+    yaw=wrap_to_pi(yaw)
 
     v = np.sqrt(np.square(vX)+np.square(vY))
     vX_ = vX * np.cos(yaw) + np.sin(yaw) * vY
     vY_ = vX * -np.sin(yaw) + np.cos(yaw) * vY
 
     aX = - a * np.cos(arcStart)
-    aY = - b * np.cos(arcStart)
+    aY = - b * np.sin(arcStart)
 
     Tangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([vX,vY])
     dTangent_hat = 1/np.sqrt(vY**2 + vX**2) *  np.array([aX,aY])
@@ -240,7 +240,7 @@ def computeDesiredVector(arc, a,b,Xnext):
     vX = -a * np.sin(arc)
     vY = b * np.cos(arc)
     aX = - a * np.cos(arc)
-    aY = - b * np.cos(arc)
+    aY = - b * np.sin(arc)
     yaw = np.arctan2(vY,vX)
 
     vX_ = vX * np.cos(yaw) + np.sin(yaw) * vY
@@ -282,8 +282,6 @@ def computeDesiredVector(arc, a,b,Xnext):
 
     prjctdLongerr = Tangent_hatRow @ coordErrVector
     prjctdLaterr = normalRowVector @ coordErrVector
-    aX = - a * np.cos(arc)
-    aY = - b * np.cos(arc)
 
     k=Tangent_hat[0,0] * dTangent_hat[1,0] - dTangent_hat[0,0] * Tangent_hat[1,0]
     r = k * v
@@ -310,8 +308,8 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     
     x0 = opti.parameter(6)
 
-    max_steer_rad = 0.4  # approx 23 degrees
-    max_accel_ms2 = 3.0
+    max_steer_rad = 1.0  # approx 23 degrees
+    max_accel_ms2 = 1.0
 
     opti.subject_to(opti.bounded(-max_steer_rad, u_opti[0,:], max_steer_rad))
     opti.subject_to(opti.bounded(-max_accel_ms2, u_opti[1,:], max_accel_ms2))
@@ -334,7 +332,7 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
         #frenet frame logic, current vX and vY are in the body frame
         #rotation
         tan[0,0]=ca.cos(x_des[-2,i]) * x_des[2,i] - ca.sin(x_des[-2,i]) * x_des[3,i]
-        tan[0,1]=ca.sin(x_des[-2,i]) * x_des[2,i] +  ca.cos(x_des[2,i]) * x_des[3,i]
+        tan[0,1]=ca.sin(x_des[-2,i]) * x_des[2,i] +  ca.cos(x_des[-2,i]) * x_des[3,i]
         tan/=(tan[0,1]**2+tan[0,0]**2)**(1/2)
         normal[0,0]=-tan[0,1]
         normal[0,1]=tan[0,0]
@@ -374,7 +372,7 @@ def scale(x,scales,u=None,flag=False):
         u[1,:] /=scales['a']
         return x,u
     return x
-def sim(f_dyn,dt,scales):
+def sim(f_dyn,dt,scales,fun):
     lossXArr = []
     lossYArr = []
 
@@ -399,7 +397,7 @@ def sim(f_dyn,dt,scales):
     x_coor_ref, y_coord_ref,arc_ref,a,b =create_trackCoordinates()
     xCurr=createStartVector(arc_ref[0],a,b)
 
-    nextX=createStartVector(arc_ref[10],a,b)
+    nextX=createStartVector(arc_ref[0],a,b)
 
     num_des_x = np.zeros((6,time_horizon+1))
     num_des_u = np.zeros((2,time_horizon))
@@ -408,6 +406,9 @@ def sim(f_dyn,dt,scales):
     U_actual = np.zeros((2,time_horizon))
 
     optimizer=create_optimizer_function(f_dyn,dt,time_horizon)
+    U_test = np.zeros((2,1))
+    U_test[0,0]=-.2
+    U_test[1,0]=.5
 
     err = 0
     for i in range(60):
@@ -463,14 +464,18 @@ def sim(f_dyn,dt,scales):
         print(f"ran {i +1} times")
         des_x,des_u=scale(num_des_x,scales,num_des_u,flag=True)
         x_scaled = scale(x=xCurr,scales=scales)
-        U_actual=optimizer(des_x,des_u,xCurr)
+        U_actual=optimizer(des_x,des_u,x_scaled)
 
         U_actual[0,:] *= scales['delta']
         U_actual[1,:] *= scales['a']
+        print("OH GOD HES COMING",fun(xCurr,U_actual[:,0]))
+
 
         xCurr = step(xCurr,U_actual[:,0],f_dyn,dt)
-
-        plot_control_accel.append(U_actual[0,1].full().flatten())
+        print("Before:",xCurr)
+        #xCurr = step(xCurr,U_test,f_dyn,dt)
+        print("after:",xCurr)
+        plot_control_accel.append(U_actual[1,0].full().flatten())
         plot_steering_angle.append(U_actual[0,0].full().flatten())
 
         yaw_chosen.append(xCurr[-2].full().flatten())
@@ -552,21 +557,21 @@ def main():
 
     scales = {'x': a,
               'y': b,
-              'v': 30.0,
+              'v': 15.0,
               'yaw': 2 * ca.pi,
-              'r': ca.pi,
+              'r': 2,
               'delta': 0.3,
-              'a': 10.0,
+              'a': 3.0,
 
     }
 
 
 
     X,U=create_symbolicVectors()
-    X_DOT=create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
+    X_DOT,fun=create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
                       X,U, F_xr)
     f_dyn = ca.Function("f_dyn", [X, U], [X_DOT])
-    lossXArr,lossYArr=sim(f_dyn,dt,scales)
+    lossXArr,lossYArr=sim(f_dyn,dt,scales,fun)
     plot_loss(lossXArr,"Longitudinal Positional Diff")
     plot_loss(lossYArr,'Lateral Positional Diff')
 
