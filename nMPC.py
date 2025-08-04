@@ -245,10 +245,9 @@ def computeDesiredVector(arc, a,b,Xnext):
 
     vX_ = vX * np.cos(yaw) + np.sin(yaw) * vY
     vY_ = vX * -np.sin(yaw) + np.cos(yaw) * vY
-    vY = vY_
-    vX = vX_
 
-    v = np.sqrt(np.square(vX)+np.square(vY))
+    v_g_norm = np.sqrt(np.square(vX)+np.square(vY))
+    v_b_norm = np.sqrt(np.square(vX_)+np.square(vY_))
 
     tanVector = np.zeros((2,1))
     dtanVector = np.zeros((2,1))
@@ -284,9 +283,9 @@ def computeDesiredVector(arc, a,b,Xnext):
     prjctdLaterr = normalRowVector @ coordErrVector
 
     k=Tangent_hat[0,0] * dTangent_hat[1,0] - dTangent_hat[0,0] * Tangent_hat[1,0]
-    r = k * v
-    
-    return ca.vertcat(xDes,yDes,vX,vY,yaw,r),prjctdLongerr,prjctdLaterr
+    r = k * v_g_norm
+
+    return ca.vertcat(xDes,yDes,vX_,vY_,yaw,r),prjctdLongerr,prjctdLaterr
     #compute velocity by dt, or by velocity at current 
 
 def create_optimizer_function(f_dyn,dt,time_horizon):
@@ -295,9 +294,9 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
 
     opti = Opti()
     opts = {
-        'ipopt.print_level': 0,           # 0 = no output, 1 = minimal, 5 = full debug
-        'print_time': False,              # Don't print timing info
-        'ipopt.sb': 'yes',                # Suppress IPOPT banner
+        'ipopt.print_level': 3,           # 0 = no output, 1 = minimal, 5 = full debug
+        'print_time': True,              # Don't print timing info
+        'ipopt.sb': 'no',                # Suppress IPOPT banner
         'ipopt.max_iter': 500,            # Limit iterations (default is often 3000)
     }
     opti.solver('ipopt',opts)
@@ -311,12 +310,12 @@ def create_optimizer_function(f_dyn,dt,time_horizon):
     max_steer_rad = 1.0  # approx 23 degrees
     max_accel_ms2 = 1.0
 
-    opti.subject_to(opti.bounded(-max_steer_rad, u_opti[0,:], max_steer_rad))
-    opti.subject_to(opti.bounded(-max_accel_ms2, u_opti[1,:], max_accel_ms2))
+    #opti.subject_to(opti.bounded(-max_steer_rad, u_opti[0,:], max_steer_rad))
+    #opti.subject_to(opti.bounded(-max_accel_ms2, u_opti[1,:], max_accel_ms2))
     opti.subject_to(x_opti[:, 0] == x0)
 
-    opti.subject_to(opti.bounded(0.1, x_opti[2, :], 15.0))  # Vx
-    opti.subject_to(opti.bounded(-5.0, x_opti[3, :], 5.0))  # Vy 
+    #opti.subject_to(opti.bounded(0.1, x_opti[2, :], 15.0))  # Vx
+    #opti.subject_to(opti.bounded(-5.0, x_opti[3, :], 5.0))  # Vy 
 
     x_des = opti.parameter(6,time_horizon+1)
     u_des = opti.parameter(2,time_horizon)
@@ -516,12 +515,23 @@ def sim(f_dyn,dt,scales,fun):
     plt.show()
     return lossXArr,lossYArr
 
+def dummySim(f_dyn,dt):
+    U = np.zeros((2,1))
+    U[0,0]=.1
+    Xcurr = np.zeros((6,1))
+    Xcurr[2,0]= 5
+    print("dummy dum dum")
+
+    for i in range(5):
+        print(f"{i},{Xcurr}")
+        Xcurr=step(Xcurr,U,f_dyn,dt)
+    input("gay sun or thot dotter?")
+
 def main():
-    mass = 150  # kg
+    mass = 100  # kg
     length = 4   # m
     width = 2.0  # m, Changed from 12
-    I_z = mass / 12 * (length**2 + width**2)
-
+    I_z = 60
     #distance from front and rear axle to COM
     #simplified assumption by only longitudinal axis
     L_f = 1.2
@@ -532,7 +542,7 @@ def main():
     #tire model parameters
     D = 400         # N (reasonable tire force)
     B = 10           # tire stiffness
-    C = 1.3          # shape factor
+    C = 10          # shape factor
     #B = stiffness
     #C = shape factor
     #D = peak lateral force
@@ -571,7 +581,9 @@ def main():
     X_DOT,fun=create_stateSpace(I_z,mass,L_f, L_r,max_force,C,slip_threshold,
                       X,U, F_xr)
     f_dyn = ca.Function("f_dyn", [X, U], [X_DOT])
+    dummySim(f_dyn,dt)
     lossXArr,lossYArr=sim(f_dyn,dt,scales,fun)
+    dummy_sim(f_dyn,dt)
     plot_loss(lossXArr,"Longitudinal Positional Diff")
     plot_loss(lossYArr,'Lateral Positional Diff')
 
