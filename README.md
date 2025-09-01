@@ -22,6 +22,8 @@ The training method matches the original folders with the respective temporary f
 
   Along with pixel coords of centerline.
 
+## CV info document:
+https://docs.google.com/document/d/1oydoEg7ShT8s-GqMCGngmE2rg-mTC_cPRtpS6nkWkDc/edit?usp=sharing
 
 ## Non Linear MPC info document:
 https://kennesawedu-my.sharepoint.com/:w:/r/personal/vwulfek1_students_kennesaw_edu/Documents/Non-Linear%20Model%20Predictive%20Control%20for%20Autonomous%20Go-Karts.docx?d=w4c3b30fee2d44488954b32006cc48bd6&csf=1&web=1&e=BNkHsO
