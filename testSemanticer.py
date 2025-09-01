@@ -21,7 +21,7 @@ def smart_resize(img,target_width=768):
     aspect_ratio = 10 / 16  # 0.625 for 16:10
     
     new_width = target_width  # 768
-    new_height = int(target_width * aspect_ratio)  # 768 * 0.625 = 480
+    new_height = 432  # 768 * 0.625 = 480
     
     # print(f"Resizing {img.size[0]}x{img.size[1]} → {new_width}x{new_height}")
     # print(f"Will create tensor shape: [3, {new_height}, {new_width}]")
@@ -80,8 +80,7 @@ def annotate_inference(model,batch_tensor,threshold=.75):
     except Exception as e:
         print(f"error at inference with {e}")
 
-def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,device='cpu'):
-
+def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,skipFrameNum=5,device='cpu'):
     total_loss = 0
 
     for i, (img_folder,folder) in enumerate(zip(os.listdir(img_src_meta_folder),os.listdir(trainFolder))):
@@ -102,11 +101,11 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,dev
             tensors.sort()
 
 
-            if len(tensors)!=len(images):
-                print("warning may be a folder mismatch")
-                print(tensors,images)
-                print(len(tensors),len(images))
-                continue
+            # if len(tensors)!=len(images):
+            #     #print("warning may be a folder mismatch")
+            #     #print(tensors,images)
+            #     #print(len(tensors),len(images))
+            #     continue
 
 
             for z,(image_,label_file) in enumerate(zip(images,tensors)):
@@ -115,7 +114,7 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,dev
                         print("No images found")
 
                     #only train on 5th images
-                    if z > len(images)-5 or z%5!=0:
+                    if z > len(images)-skipFrameNum or z%skipFrameNum!=0:
                         continue
                     
                     labels = torch.load(label_file)
@@ -125,8 +124,6 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,dev
 
                     nxt_input_tensor, nxt_img, shaped_nxt_img = preprocess_image(images[z+1])
 
-                    print(f"pre batch+1 input tensor shape: {input_tensor.shape}, label shape: {labels.shape}")
-
                     input_tensor = input_tensor.to(device)
                     nxt_input_tensor = nxt_input_tensor.to(device)
                     labels = labels.unsqueeze(0).to(device).long()
@@ -134,10 +131,10 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,dev
 
                     batch_inputs = torch.cat([input_tensor,nxt_input_tensor],dim=0)
                     batch_labels = torch.cat([labels,nxt_labels],dim=0)
-
-                    if (batch_inputs.shape != batch_labels.shape):
-                        print("WARNING, LOADING ERROR MIGHT OCCUR")
-                        print("shape shi",batch_inputs.shape, batch_labels.shape)
+                    # if (batch_inputs.shape != batch_labels.shape):
+                    #     continue
+                        #print("WARNING, LOADING ERROR MIGHT OCCUR")
+                        #print("shape shi",batch_inputs.shape, batch_labels.shape)
 
                     optimizer.zero_grad()
                     op=model(batch_inputs)
@@ -145,6 +142,7 @@ def train(model,criterion,optimizer,img_src_meta_folder,trainFolder,savePath,dev
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
+                    print("iterated")
             save(model,savePath)
             print(f"Epoch [{i+1}], Loss: {total_loss:.4f}")
 
@@ -296,12 +294,9 @@ def inference_vid(model,img_path,temp_frames_path,op_video_path):
                     print(f"\nAn unexpected error occurred during FFmpeg execution: {e}")
 
 
-
 def inference(model,img_path):
 
     batch_tensor, orig_image,reshaped_img= preprocess_image(img_path)
-    torch.onnx.export(model,batch_tensor,'model.onnx')
-    print("succes?")
     #road = ID 0
     try:
         with torch.no_grad():
@@ -500,6 +495,7 @@ def main():
 
     img_path = "C:/Project/DL_HW/dataset/images_backup_aks_race"
     meta_folder_path = "C:/Project/DL_HW/dataset/vids"
+    trainFrames = "C:/Project/DL_HW/dataset/trainFrames"
     MODEL_NAME='deeplabv3plus_resnet101'
     NUM_CLASSES = 19
     OUTPUT_STRIDE = 8
@@ -507,28 +503,30 @@ def main():
 
     model = modeling.__dict__[MODEL_NAME](num_classes=NUM_CLASSES, output_stride=OUTPUT_STRIDE)
     model.load_state_dict(torch.load( PATH_TO_PTH, map_location='cpu',weights_only=False)['model_state'])
-    print("entering meta mode")
+    print("initialization complete")
 
-    #annotation function##
+    # #annotation function##
     # model.eval()
-    # segment_metafolder(model,img_path,meta_folder_path,"C:/Project/DL_HW/dataset")
-    #annotation function##
+    # segment_metafolder(model,img_path,meta_folder_path, temp_frame_path="C:/Project/DL_HW/dataset")
+    # #annotation function##
 
-    ##train function##
-    ##train function expects parent folder with sub image and sub tensor folders with number IDs
+    # #train function##
+    # #train function expects parent folder with sub image and sub tensor folders with number IDs
     # model.train()
     # criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-
-    # train(model,criterion,optimizer,img_path,"C:/Project/DL_HW/dataset/trainFrames")
-    ##train function##
+    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-6)
+    # print('training...')
+    # train(model,criterion,optimizer,img_path,trainFrames,savePath="C:/Project/SemanticTester/CVModels/currModel.pth")
+    # #train function##
 
     ##!INFERENCE FUNCTION##
     frame_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-06-16-45-44/2025-06-06-16-45-53.419261.jpg"
+    smple_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-07-12-14-29"
+
     model.eval()
     
-    smple_path = "C:/Project/DL_HW/dataset/images_backup_aks_race/2025-06-07-12-14-29"
-    inference_vid(model,smple_path,temp_frames_path="C:/Project/SemanticTester/tempFrameim",op_video_path="C:/Project/SemanticTester/output/vid.mp4")
+    #inference_vid(model,smple_path,temp_frames_path="C:/Project/SemanticTester/tempFrameim",op_video_path="C:/Project/SemanticTester/output/vid.mp4")
+    inference(model,smple_path)
     img1,discrete_cntrPoints,InterpolatedCntrPoints=inference(model,frame_path)
     
     plt.imshow(img1); plt.show()
@@ -538,6 +536,7 @@ def main():
 
 
     # create_overlay_visualization(original_img,op)
+    # torch.onnx.export(model,batch_tensor,'model.onnx')
 
     print("successful homes")
 if __name__ == "__main__":
