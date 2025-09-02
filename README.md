@@ -5,7 +5,7 @@ Necessary linkage of the path's weights and the folder locations for respective 
 Training Data: 
 https://drive.google.com/file/d/1Hz-Hlyr5NFwk2YSwtRh5L75vWTK1r3k3/view?usp=sharing
 
-current model weights: https://drive.google.com/file/d/1HXUEMMD85b746F2CVlpJ4ICecv6q_Ebz/view?usp=sharing
+current model weights: https://drive.google.com/file/d/1WJeUss2ko5mjIykvDbLMbn8uyhRXuON-/view?usp=sharing
 
 or 
 
