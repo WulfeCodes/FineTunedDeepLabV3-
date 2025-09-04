@@ -9,7 +9,7 @@ current model weights: https://drive.google.com/file/d/1WJeUss2ko5mjIykvDbLMbn8u
 
 or 
 
-https://www.dropbox.com/scl/fo/i4k86qqiuzy33aawug287/AJZbFCPIvT521xW8lekSDr8/best_deeplabv3plus_mobilenet_cityscapes_os16.pth?rlkey=fgm7rgpeankeh9394j492sxif&st=oc0bpoyx&dl=0
+https://drive.google.com/file/d/1Vwkhli3TEMLoWBymI1PiXJCH3Y4MDdTJ/view?usp=sharing
 
 git clone of https://github.com/VainF/DeepLabV3Plus-Pytorch.git is recommended for model initialization along with a requirements.txt install on a clean venv. 
 
