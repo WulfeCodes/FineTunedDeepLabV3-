@@ -8,7 +8,7 @@ https://drive.google.com/file/d/1Hz-Hlyr5NFwk2YSwtRh5L75vWTK1r3k3/view?usp=shari
 current model weights: https://drive.google.com/file/d/1WJeUss2ko5mjIykvDbLMbn8uyhRXuON-/view?usp=sharing
 
 or Quantized ONNX: 
-[https://drive.google.com/file/d/1wpdHzt0RHNz02JmcarsWK7XQqETBvnvP/view?usp=sharing]
+https://drive.google.com/file/d/1OnO1lCKWBXHQDGAcTA4uYjCLubIDR2kK/view?usp=sharing
 
 git clone of https://github.com/VainF/DeepLabV3Plus-Pytorch.git is recommended for model initialization along with a requirements.txt install on a clean venv. 
 
